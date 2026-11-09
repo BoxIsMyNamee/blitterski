@@ -187,13 +187,18 @@ final class FeedStore: ObservableObject {
     }
 
     func loadThread(_ post: Post) async {
-        guard post.network == .bluesky else { return }
         let key = "thread:\(post.id)"
         var s = states[key] ?? State()
         s.loading = true
         states[key] = s
         do {
-            let replies = try await bsky.thread(uri: post.id)
+            let replies: [Post]
+            if post.network == .bluesky {
+                replies = try await bsky.thread(uri: post.id)
+            } else {
+                guard let url = post.url else { throw XError.badResponse }
+                replies = try await xActions.replies(statusURL: url)
+            }
             s.posts = replies
             s.error = nil
         } catch {

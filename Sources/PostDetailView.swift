@@ -45,12 +45,14 @@ struct PostDetailView: View {
                 if let error { Text(error).font(.footnote).foregroundStyle(.red) }
 
                 Divider()
-                if post.network == .x {
-                    Text("Replies aren't loaded for Twitter posts yet.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                } else if replies.loading && replies.posts.isEmpty {
+                if replies.loading && replies.posts.isEmpty {
                     ProgressView().frame(maxWidth: .infinity)
                 } else {
+                    if let e = replies.error {
+                        Text(e).font(.footnote).foregroundStyle(.red)
+                    } else if replies.loadedOnce && replies.posts.isEmpty {
+                        Text("No replies yet.").font(.footnote).foregroundStyle(.secondary)
+                    }
                     ForEach(replies.posts) { r in
                         PostRow(post: r)
                         Divider()

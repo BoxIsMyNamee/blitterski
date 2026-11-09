@@ -35,7 +35,31 @@ enum XTimelineParser {
         return posts
     }
 
-    private static func post(from raw: [String: Any]) -> Post? {
+    /// Replies from a TweetDetail response (everything except the focal tweet itself).
+    static func parseDetail(_ data: Data, excluding focalID: String) -> [Post] {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [] }
+        let instructions = dig(root, ["data", "threaded_conversation_with_injections_v2", "instructions"]) as? [[String: Any]] ?? []
+        var out: [Post] = []
+        var seen = Set<String>([focalID])
+        func add(_ item: [String: Any]) {
+            guard var r = dig(item, ["itemContent", "tweet_results", "result"]) as? [String: Any] else { return }
+            if let inner = r["tweet"] as? [String: Any] { r = inner }
+            if let p = post(from: r), seen.insert(p.id).inserted { out.append(p) }
+        }
+        for ins in instructions {
+            for e in (ins["entries"] as? [[String: Any]]) ?? [] {
+                let id = e["entryId"] as? String ?? ""
+                // Replies live in conversation modules; skip the focal tweet and its ancestors.
+                guard id.hasPrefix("conversationthread-") else { continue }
+                for it in (dig(e, ["content", "items"]) as? [[String: Any]]) ?? [] {
+                    if let item = it["item"] as? [String: Any] { add(item) }
+                }
+            }
+        }
+        return out
+    }
+
+    static func post(from raw: [String: Any]) -> Post? {
         var r = raw
         var repostedBy: String?
         // Retweets: show the original, remember who reposted.

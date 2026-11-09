@@ -12,20 +12,81 @@ enum XAction {
 /// real page's buttons. That sidesteps request signing entirely, at the cost of being
 /// tied to X's markup (data-testid attributes), which have been stable for years.
 @MainActor
-final class XActionRunner: NSObject, WKNavigationDelegate {
+final class XActionRunner: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private let webView: WKWebView
     private let lock = AsyncLock()
     private var navCont: CheckedContinuation<Void, Never>?
     private var navToken = UUID()
 
     override init() {
-        webView = WKWebView(frame: CGRect(x: -2000, y: 0, width: 1000, height: 1200),
-                            configuration: WKWebViewConfiguration())
+        let conf = WKWebViewConfiguration()
+        conf.userContentController.addUserScript(
+            WKUserScript(source: Self.detailHook, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        webView = WKWebView(frame: CGRect(x: -2000, y: 0, width: 1000, height: 1200), configuration: conf)
         webView.customUserAgent = xUserAgent
         webView.alpha = 0.01
         webView.isUserInteractionEnabled = false
         super.init()
         webView.navigationDelegate = self
+        conf.userContentController.add(WeakHandler(self), name: "xdetail")
+    }
+
+    // MARK: Replies (TweetDetail capture)
+
+    private var detailBodies: [String] = []
+
+    private final class WeakHandler: NSObject, WKScriptMessageHandler {
+        weak var target: XActionRunner?
+        init(_ t: XActionRunner) { target = t }
+        func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
+            guard let d = m.body as? [String: Any], let b = d["body"] as? String else { return }
+            Task { @MainActor in self.target?.detailBodies.append(b) }
+        }
+    }
+
+    func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {}
+
+    private static let detailHook = """
+    (function(){
+      const post = (url, body) => window.webkit.messageHandlers.xdetail.postMessage({url: url, body: body});
+      const wanted = u => /\\/graphql\\/[^/]+\\/TweetDetail/.test(u || '');
+      const of = window.fetch;
+      window.fetch = async function(...args) {
+        const res = await of.apply(this, args);
+        try {
+          const u = (typeof args[0] === 'string') ? args[0] : (args[0] && args[0].url);
+          if (wanted(u)) res.clone().text().then(t => post(u, t));
+        } catch (e) {}
+        return res;
+      };
+      const oo = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function(m, u) {
+        this.__u = u;
+        this.addEventListener('load', () => { try { if (wanted(this.__u)) post(this.__u, this.responseText); } catch (e) {} });
+        return oo.apply(this, arguments);
+      };
+    })();
+    """
+
+    /// Loads the tweet's page and returns the replies X's own JS fetched for it.
+    func replies(statusURL: URL) async throws -> [Post] {
+        await lock.acquire()
+        defer { lock.release() }
+        attach()
+        detailBodies = []
+        let id = statusURL.lastPathComponent
+        await load(statusURL)
+        let start = Date()
+        var best: [Post] = []
+        while Date().timeIntervalSince(start) < 15 {
+            for b in detailBodies {
+                let found = XTimelineParser.parseDetail(Data(b.utf8), excluding: id)
+                if found.count > best.count { best = found }
+            }
+            if !best.isEmpty && Date().timeIntervalSince(start) > 2.5 { break }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        return best
     }
 
     private func attach() {
