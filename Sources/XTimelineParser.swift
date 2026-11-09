@@ -90,8 +90,21 @@ enum XTimelineParser {
         let media = (dig(legacy, ["extended_entities", "media"]) as? [[String: Any]])
             ?? (dig(legacy, ["entities", "media"]) as? [[String: Any]]) ?? []
         var images: [URL] = []
+        var videos: [PostVideo] = []
         for m in media {
             if let short = m["url"] as? String { text = text.replacingOccurrences(of: short, with: "") }
+            let type = m["type"] as? String
+            if type == "video" || type == "animated_gif" {
+                let variants = (dig(m, ["video_info", "variants"]) as? [[String: Any]]) ?? []
+                let best = variants
+                    .filter { ($0["content_type"] as? String) == "video/mp4" }
+                    .max { ($0["bitrate"] as? Int ?? 0) < ($1["bitrate"] as? Int ?? 0) }
+                if let u = (best?["url"] as? String).flatMap(URL.init(string:)) {
+                    videos.append(PostVideo(url: u, poster: (m["media_url_https"] as? String).flatMap(URL.init(string:)),
+                                            gif: type == "animated_gif"))
+                    continue
+                }
+            }
             if let s = m["media_url_https"] as? String, let u = URL(string: s) { images.append(u) }
         }
         text = decodeEntities(text).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,7 +119,7 @@ enum XTimelineParser {
                     replyCount: legacy["reply_count"] as? Int ?? 0,
                     repostCount: legacy["retweet_count"] as? Int ?? 0,
                     likeCount: legacy["favorite_count"] as? Int ?? 0,
-                    images: images, repostedBy: repostedBy,
+                    images: images, videos: videos, repostedBy: repostedBy,
                     url: URL(string: "https://x.com/\(handle)/status/\(id)"),
                     liked: legacy["favorited"] as? Bool ?? false,
                     reposted: legacy["retweeted"] as? Bool ?? false)

@@ -15,6 +15,7 @@ struct Post: Identifiable, Hashable {
     var repostCount: Int = 0
     var likeCount: Int = 0
     var images: [URL] = []
+    var videos: [PostVideo] = []
     var repostedBy: String? = nil
     var url: URL? = nil
 
@@ -28,4 +29,13 @@ struct Post: Identifiable, Hashable {
     var repostRecord: String? = nil
     var rootURI: String? = nil
     var rootCID: String? = nil
+}
+
+struct PostVideo: Hashable, Identifiable {
+    let url: URL
+    let poster: URL?
+    var gif = false
+    var id: URL { url }
+    /// Plain files can be saved to Photos; HLS playlists can't.
+    var savable: Bool { url.pathExtension.lowercased() == "mp4" }
 }

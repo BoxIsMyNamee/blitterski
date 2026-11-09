@@ -64,6 +64,7 @@ struct BskyImage: Decodable {
 final class BskyEmbed: Decodable {
     let images: [BskyImage]?
     let thumbnail: String?   // video poster
+    let playlist: String?    // video HLS playlist
     let media: BskyEmbed?    // recordWithMedia
 }
 
@@ -323,7 +324,7 @@ actor BlueskyClient {
                     avatarURL: p.author.avatar.flatMap(URL.init(string:)),
                     text: p.record.text ?? "", createdAt: parseDate(p.indexedAt),
                     replyCount: p.replyCount ?? 0, repostCount: p.repostCount ?? 0, likeCount: p.likeCount ?? 0,
-                    images: imageURLs(p.embed),
+                    images: imageURLs(p.embed), videos: videoList(p.embed),
                     repostedBy: repostedBy,
                     url: URL(string: "https://bsky.app/profile/\(p.author.handle)/post/\(rkey)"),
                     liked: p.viewer?.like != nil,
@@ -335,10 +336,18 @@ actor BlueskyClient {
                     rootCID: p.record.reply?.root.cid ?? p.cid)
     }
 
+    private static func videoList(_ e: BskyEmbed?) -> [PostVideo] {
+        guard let e else { return [] }
+        if let p = e.playlist, let u = URL(string: p) {
+            return [PostVideo(url: u, poster: e.thumbnail.flatMap(URL.init(string:)))]
+        }
+        return videoList(e.media)
+    }
+
     private static func imageURLs(_ e: BskyEmbed?) -> [URL] {
         guard let e else { return [] }
         var out = (e.images ?? []).compactMap { ($0.thumb ?? $0.fullsize).flatMap(URL.init(string:)) }
-        if let t = e.thumbnail, let u = URL(string: t) { out.append(u) }
+        if e.playlist == nil, let t = e.thumbnail, let u = URL(string: t) { out.append(u) }
         if out.isEmpty, let m = e.media { out = imageURLs(m) }
         return out
     }

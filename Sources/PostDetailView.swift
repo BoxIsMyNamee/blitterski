@@ -32,6 +32,7 @@ struct PostDetailView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if !post.images.isEmpty { ImageGrid(urls: post.images) }
+                ForEach(post.videos) { InlineVideo(video: $0) }
                 Text(post.createdAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.footnote).foregroundStyle(.secondary)
 

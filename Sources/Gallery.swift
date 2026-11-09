@@ -124,6 +124,9 @@ final class PhotoSaver: NSObject {
     static var keep: PhotoSaver?
     let result: (Bool) -> Void
     init(_ r: @escaping (Bool) -> Void) { result = r }
+    @objc func videoDone(_ path: String, error: NSError?, context: UnsafeRawPointer?) {
+        DispatchQueue.main.async { self.result(error == nil); PhotoSaver.keep = nil }
+    }
     @objc func done(_ image: UIImage, error: NSError?, context: UnsafeRawPointer?) {
         DispatchQueue.main.async { self.result(error == nil); PhotoSaver.keep = nil }
     }

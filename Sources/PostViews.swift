@@ -30,6 +30,7 @@ struct PostRow: View {
                     if !post.images.isEmpty {
                         ImageGrid(urls: post.images).padding(.top, 2)
                     }
+                    ForEach(post.videos) { InlineVideo(video: $0).padding(.top, 2) }
                     PostActions(post: post, onReply: onReply).padding(.top, 4)
                 }
             }
