@@ -1,10 +1,11 @@
 import Foundation
 
 enum XError: Error, LocalizedError {
-    case badResponse, timeout, notLoggedIn
+    case badResponse, timeout, notLoggedIn, actionFailed(String)
 
     var errorDescription: String? {
         switch self {
+        case .actionFailed(let why): return "Twitter action failed (\(why))"
         case .badResponse: return "Unexpected response from Twitter"
         case .timeout: return "Timed out waiting for Twitter. Are you signed in?"
         case .notLoggedIn: return "Not signed in to Twitter. Connect it in Settings (profile tab)."
@@ -82,7 +83,9 @@ enum XTimelineParser {
                     repostCount: legacy["retweet_count"] as? Int ?? 0,
                     likeCount: legacy["favorite_count"] as? Int ?? 0,
                     images: images, repostedBy: repostedBy,
-                    url: URL(string: "https://x.com/\(handle)/status/\(id)"))
+                    url: URL(string: "https://x.com/\(handle)/status/\(id)"),
+                    liked: legacy["favorited"] as? Bool ?? false,
+                    reposted: legacy["retweeted"] as? Bool ?? false)
     }
 
     private static func displayName(of r: [String: Any]) -> String? {

@@ -41,8 +41,19 @@ struct BskyAuthor: Decodable {
     let avatar: String?
 }
 
+struct BskyRef: Decodable {
+    let uri: String
+    let cid: String
+}
+
+struct BskyReplyRef: Decodable {
+    let root: BskyRef
+    let parent: BskyRef
+}
+
 struct BskyRecord: Decodable {
     let text: String?
+    let reply: BskyReplyRef?
 }
 
 struct BskyImage: Decodable {
@@ -56,8 +67,14 @@ final class BskyEmbed: Decodable {
     let media: BskyEmbed?    // recordWithMedia
 }
 
+struct BskyViewer: Decodable {
+    let like: String?
+    let repost: String?
+}
+
 struct BskyPost: Decodable {
     let uri: String
+    let cid: String
     let author: BskyAuthor
     let record: BskyRecord
     let embed: BskyEmbed?
@@ -65,6 +82,16 @@ struct BskyPost: Decodable {
     let repostCount: Int?
     let likeCount: Int?
     let indexedAt: String
+    let viewer: BskyViewer?
+}
+
+struct BskyThreadResponse: Decodable {
+    let thread: BskyThreadNode
+}
+
+final class BskyThreadNode: Decodable {
+    let post: BskyPost?
+    let replies: [BskyThreadNode]?
 }
 
 // MARK: - Client
@@ -101,6 +128,8 @@ actor BlueskyClient {
         Secrets.clear(key: BlueskyClient.key)
     }
 
+    // MARK: Reading
+
     func timeline(cursor: String?) async throws -> (posts: [Post], cursor: String?) {
         var q = [URLQueryItem(name: "limit", value: "40")]
         if let cursor { q.append(URLQueryItem(name: "cursor", value: cursor)) }
@@ -111,6 +140,26 @@ actor BlueskyClient {
         var q = [URLQueryItem(name: "feed", value: uri), URLQueryItem(name: "limit", value: "40")]
         if let cursor { q.append(URLQueryItem(name: "cursor", value: cursor)) }
         return try BlueskyClient.decodeFeed(try await get("app.bsky.feed.getFeed", q))
+    }
+
+    /// Replies under a post, flattened depth-first.
+    func thread(uri: String) async throws -> [Post] {
+        let data = try await get("app.bsky.feed.getPostThread", [
+            URLQueryItem(name: "uri", value: uri),
+            URLQueryItem(name: "depth", value: "3"),
+            URLQueryItem(name: "parentHeight", value: "0"),
+        ])
+        let r = try JSONDecoder().decode(BskyThreadResponse.self, from: data)
+        var out: [Post] = []
+        func walk(_ nodes: [BskyThreadNode]?) {
+            for n in nodes ?? [] {
+                guard let p = n.post else { continue }
+                out.append(BlueskyClient.map(p, repostedBy: nil))
+                walk(n.replies)
+            }
+        }
+        walk(r.thread.replies)
+        return out
     }
 
     /// The user's saved/pinned custom feeds, so they can be added as tabs.
@@ -135,6 +184,68 @@ actor BlueskyClient {
         }
     }
 
+    // MARK: Writing
+
+    func like(uri: String, cid: String) async throws -> String {
+        try await createRecord("app.bsky.feed.like", [
+            "$type": "app.bsky.feed.like",
+            "subject": ["uri": uri, "cid": cid],
+            "createdAt": Self.now(),
+        ])
+    }
+
+    func unlike(recordURI: String) async throws {
+        try await deleteRecord("app.bsky.feed.like", recordURI)
+    }
+
+    func repost(uri: String, cid: String) async throws -> String {
+        try await createRecord("app.bsky.feed.repost", [
+            "$type": "app.bsky.feed.repost",
+            "subject": ["uri": uri, "cid": cid],
+            "createdAt": Self.now(),
+        ])
+    }
+
+    func unrepost(recordURI: String) async throws {
+        try await deleteRecord("app.bsky.feed.repost", recordURI)
+    }
+
+    func createPost(text: String) async throws {
+        _ = try await createRecord("app.bsky.feed.post", [
+            "$type": "app.bsky.feed.post",
+            "text": text,
+            "createdAt": Self.now(),
+        ])
+    }
+
+    func reply(text: String, parent: (uri: String, cid: String), root: (uri: String, cid: String)) async throws {
+        _ = try await createRecord("app.bsky.feed.post", [
+            "$type": "app.bsky.feed.post",
+            "text": text,
+            "createdAt": Self.now(),
+            "reply": [
+                "root": ["uri": root.uri, "cid": root.cid],
+                "parent": ["uri": parent.uri, "cid": parent.cid],
+            ],
+        ])
+    }
+
+    private func createRecord(_ collection: String, _ record: [String: Any]) async throws -> String {
+        guard let did = session?.did else { throw BskyError.notLoggedIn }
+        let data = try await send("com.atproto.repo.createRecord",
+                                  ["repo": did, "collection": collection, "record": record])
+        guard let o = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let uri = o["uri"] as? String else { throw BskyError.badResponse }
+        return uri
+    }
+
+    private func deleteRecord(_ collection: String, _ recordURI: String) async throws {
+        guard let did = session?.did else { throw BskyError.notLoggedIn }
+        guard let rkey = recordURI.split(separator: "/").last.map(String.init) else { throw BskyError.badResponse }
+        _ = try await send("com.atproto.repo.deleteRecord",
+                           ["repo": did, "collection": collection, "rkey": rkey])
+    }
+
     // MARK: Networking
 
     private func get(_ method: String, _ query: [URLQueryItem]) async throws -> Data {
@@ -153,6 +264,27 @@ actor BlueskyClient {
                 continue
             }
             throw BskyError.http(code, body)
+        }
+        throw BskyError.badResponse
+    }
+
+    private func send(_ method: String, _ body: [String: Any]) async throws -> Data {
+        for attempt in 0..<2 {
+            guard let s = session else { throw BskyError.notLoggedIn }
+            var req = URLRequest(url: URL(string: base + method)!)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer \(s.accessJwt)", forHTTPHeaderField: "Authorization")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 200 { return data }
+            let text = String(decoding: data, as: UTF8.self)
+            if attempt == 0, text.contains("ExpiredToken") {
+                try await refresh()
+                continue
+            }
+            throw BskyError.http(code, text)
         }
         throw BskyError.badResponse
     }
@@ -177,20 +309,30 @@ actor BlueskyClient {
     static func decodeFeed(_ data: Data) throws -> (posts: [Post], cursor: String?) {
         let r = try JSONDecoder().decode(BskyFeedResponse.self, from: data)
         let posts = r.feed.map { item -> Post in
-            let p = item.post
-            let rkey = p.uri.split(separator: "/").last.map(String.init) ?? ""
-            let name = (p.author.displayName?.isEmpty == false) ? p.author.displayName! : p.author.handle
             let by = item.reason?.by
-            return Post(id: p.uri, network: .bluesky,
-                        authorHandle: p.author.handle, authorName: name,
-                        avatarURL: p.author.avatar.flatMap(URL.init(string:)),
-                        text: p.record.text ?? "", createdAt: parseDate(p.indexedAt),
-                        replyCount: p.replyCount ?? 0, repostCount: p.repostCount ?? 0, likeCount: p.likeCount ?? 0,
-                        images: imageURLs(p.embed),
-                        repostedBy: by.map { $0.displayName ?? $0.handle },
-                        url: URL(string: "https://bsky.app/profile/\(p.author.handle)/post/\(rkey)"))
+            return map(item.post, repostedBy: by.map { $0.displayName ?? $0.handle })
         }
         return (posts, r.cursor)
+    }
+
+    static func map(_ p: BskyPost, repostedBy: String?) -> Post {
+        let rkey = p.uri.split(separator: "/").last.map(String.init) ?? ""
+        let name = (p.author.displayName?.isEmpty == false) ? p.author.displayName! : p.author.handle
+        return Post(id: p.uri, network: .bluesky,
+                    authorHandle: p.author.handle, authorName: name,
+                    avatarURL: p.author.avatar.flatMap(URL.init(string:)),
+                    text: p.record.text ?? "", createdAt: parseDate(p.indexedAt),
+                    replyCount: p.replyCount ?? 0, repostCount: p.repostCount ?? 0, likeCount: p.likeCount ?? 0,
+                    images: imageURLs(p.embed),
+                    repostedBy: repostedBy,
+                    url: URL(string: "https://bsky.app/profile/\(p.author.handle)/post/\(rkey)"),
+                    liked: p.viewer?.like != nil,
+                    reposted: p.viewer?.repost != nil,
+                    cid: p.cid,
+                    likeRecord: p.viewer?.like,
+                    repostRecord: p.viewer?.repost,
+                    rootURI: p.record.reply?.root.uri ?? p.uri,
+                    rootCID: p.record.reply?.root.cid ?? p.cid)
     }
 
     private static func imageURLs(_ e: BskyEmbed?) -> [URL] {
@@ -206,5 +348,11 @@ actor BlueskyClient {
         a.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = a.date(from: s) { return d }
         return ISO8601DateFormatter().date(from: s) ?? Date()
+    }
+
+    private static func now() -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: Date())
     }
 }

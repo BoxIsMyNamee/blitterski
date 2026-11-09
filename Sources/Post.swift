@@ -17,4 +17,15 @@ struct Post: Identifiable, Hashable {
     var images: [URL] = []
     var repostedBy: String? = nil
     var url: URL? = nil
+
+    // Interaction state
+    var liked: Bool = false
+    var reposted: Bool = false
+
+    // Bluesky-only bookkeeping
+    var cid: String? = nil
+    var likeRecord: String? = nil
+    var repostRecord: String? = nil
+    var rootURI: String? = nil
+    var rootCID: String? = nil
 }

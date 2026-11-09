@@ -1,20 +1,18 @@
 import SwiftUI
 
-extension Color {
-    static let twitterBlue = Color(red: 29 / 255, green: 161 / 255, blue: 242 / 255)
-}
-
 @main
 struct TwitterApp: App {
     @StateObject private var store = FeedStore()
     @StateObject private var config = FeedConfig()
+    @StateObject private var theme = Theme()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
                 .environmentObject(config)
-                .tint(.twitterBlue)
+                .environmentObject(theme)
+                .tint(theme.accent)
                 .task { await store.bootstrap() }
         }
     }
@@ -23,6 +21,7 @@ struct TwitterApp: App {
 /// Bottom bar mirrors the Bluesky app: Home, Search, Messages, Notifications, Profile.
 /// Only Home and Profile (settings) do anything yet.
 struct RootView: View {
+    @EnvironmentObject var store: FeedStore
     @State private var tab = 0
 
     var body: some View {
@@ -37,6 +36,22 @@ struct RootView: View {
                 .tabItem { Image(systemName: "bell") }.tag(3)
             SettingsView()
                 .tabItem { Image(systemName: "person.crop.circle") }.tag(4)
+        }
+        .overlay(alignment: .top) {
+            if let t = store.toast {
+                Text(t)
+                    .font(.footnote)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.top, 8).padding(.horizontal, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut, value: store.toast)
+        .task(id: store.toast) {
+            guard store.toast != nil else { return }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            store.toast = nil
         }
     }
 }
@@ -53,45 +68,59 @@ struct PlaceholderView: View {
 
 // MARK: - Home
 
+struct PostRoute: Hashable {
+    let postID: String
+    let focusReply: Bool
+}
+
 struct HomeView: View {
     @EnvironmentObject var config: FeedConfig
+    @EnvironmentObject var theme: Theme
     let openSettings: () -> Void
     @State private var selected = ""
     @State private var showCompose = false
+    @State private var path: [PostRoute] = []
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            if config.shown.isEmpty {
-                Spacer()
-                Text("No feeds selected.\nChoose some in Settings > Choose feeds.")
-                    .multilineTextAlignment(.center).foregroundStyle(.secondary)
-                Spacer()
-            } else {
-                FeedTabBar(feeds: config.shown, selected: $selected)
-                TabView(selection: $selected) {
-                    ForEach(config.shown) { f in
-                        FeedPage(feed: f, isActive: f.id == selected).tag(f.id)
+        NavigationStack(path: $path) {
+            VStack(spacing: 0) {
+                header
+                if config.shown.isEmpty {
+                    Spacer()
+                    Text("No feeds selected.\nChoose some in Settings > Choose feeds.")
+                        .multilineTextAlignment(.center).foregroundStyle(.secondary)
+                    Spacer()
+                } else {
+                    FeedTabBar(feeds: config.shown, selected: $selected)
+                    // All pages stay alive (keeps scroll positions); only the selected one is visible.
+                    // No paging gesture, so row swipe actions don't fight it.
+                    ZStack {
+                        ForEach(config.shown) { f in
+                            FeedPage(feed: f, isActive: f.id == selected, open: { path.append($0) })
+                                .opacity(f.id == selected ? 1 : 0)
+                                .allowsHitTesting(f.id == selected)
+                        }
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
             }
+            .overlay(alignment: .bottomTrailing) { fab }
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: PostRoute.self) { PostDetailView(route: $0) }
         }
-        .overlay(alignment: .bottomTrailing) {
-            Button { showCompose = true } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.title2).foregroundStyle(.white)
-                    .frame(width: 56, height: 56)
-                    .background(Color.twitterBlue, in: Circle())
-                    .shadow(radius: 4, y: 2)
-            }
-            .padding(16)
-        }
+        .sheet(isPresented: $showCompose) { ComposeView() }
         .onAppear(perform: ensureSelection)
         .onChange(of: config.shown) { _ in ensureSelection() }
-        .alert("Posting is coming soon", isPresented: $showCompose) {
-            Button("OK", role: .cancel) {}
+    }
+
+    private var fab: some View {
+        Button { showCompose = true } label: {
+            Image(systemName: "square.and.pencil")
+                .font(.title2).foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(theme.accent, in: Circle())
+                .shadow(radius: 4, y: 2)
         }
+        .padding(16)
     }
 
     private func ensureSelection() {
@@ -107,7 +136,7 @@ struct HomeView: View {
             }
             Spacer()
             Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.title2).foregroundStyle(Color.twitterBlue)
+                .font(.title2).foregroundStyle(theme.accent)
             Spacer()
             Color.clear.frame(width: 24, height: 24)
         }
@@ -118,6 +147,7 @@ struct HomeView: View {
 struct FeedTabBar: View {
     let feeds: [FeedDef]
     @Binding var selected: String
+    @EnvironmentObject var theme: Theme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -125,19 +155,7 @@ struct FeedTabBar: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 24) {
                         ForEach(feeds) { f in
-                            let on = selected == f.id
-                            Button {
-                                withAnimation { selected = f.id }
-                            } label: {
-                                VStack(spacing: 6) {
-                                    Text(f.title)
-                                        .font(.subheadline.weight(on ? .bold : .regular))
-                                        .foregroundStyle(on ? Color.primary : Color.secondary)
-                                    Capsule().fill(on ? Color.twitterBlue : Color.clear).frame(height: 3)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .id(f.id)
+                            tab(f)
                         }
                     }
                     .padding(.horizontal)
@@ -150,12 +168,30 @@ struct FeedTabBar: View {
         }
         .padding(.top, 4)
     }
+
+    private func tab(_ f: FeedDef) -> some View {
+        let on = selected == f.id
+        return Button {
+            withAnimation { selected = f.id }
+        } label: {
+            VStack(spacing: 6) {
+                Text(f.title)
+                    .font(.subheadline.weight(on ? .bold : .regular))
+                    .foregroundStyle(on ? Color.primary : Color.secondary)
+                Capsule().fill(on ? theme.accent : Color.clear).frame(height: 3)
+            }
+        }
+        .buttonStyle(.plain)
+        .id(f.id)
+    }
 }
 
 struct FeedPage: View {
     let feed: FeedDef
     let isActive: Bool
+    let open: (PostRoute) -> Void
     @EnvironmentObject var store: FeedStore
+    @EnvironmentObject var theme: Theme
 
     var body: some View {
         let state = store.state(for: feed)
@@ -171,11 +207,7 @@ struct FeedPage: View {
                     .font(.footnote).foregroundStyle(.secondary).listRowSeparator(.hidden)
             }
             ForEach(state.posts) { p in
-                PostRow(post: p)
-                    .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-                    .onAppear {
-                        if p.id == state.posts.last?.id { Task { await store.loadMore(feed) } }
-                    }
+                row(p, lastID: state.posts.last?.id)
             }
             if state.loading && !state.posts.isEmpty {
                 ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
@@ -187,132 +219,33 @@ struct FeedPage: View {
             if isActive && !store.state(for: feed).loadedOnce { await store.refresh(feed) }
         }
     }
-}
 
-// MARK: - Post row
-
-struct PostRow: View {
-    let post: Post
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            AsyncImage(url: post.avatarURL) { img in
-                img.resizable().scaledToFill()
-            } placeholder: {
-                Circle().fill(Color.gray.opacity(0.25))
+    private func row(_ p: Post, lastID: String?) -> some View {
+        PostRow(post: p,
+                onOpen: { open(PostRoute(postID: p.id, focusReply: false)) },
+                onReply: { open(PostRoute(postID: p.id, focusReply: true)) })
+            .listRowInsets(EdgeInsets(top: 12, leading: 14, bottom: 10, trailing: 14))
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+            .alignmentGuide(.listRowSeparatorTrailing) { d in d.width }
+            // Swipe right: like. Swipe left: open the post ready to reply.
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                Button {
+                    Task { await store.toggleLike(p) }
+                } label: {
+                    Label(p.liked ? "Unlike" : "Like", systemImage: p.liked ? "heart.slash.fill" : "heart.fill")
+                }
+                .tint(.pink)
             }
-            .frame(width: 42, height: 42)
-            .clipShape(Circle())
-
-            VStack(alignment: .leading, spacing: 4) {
-                if let by = post.repostedBy {
-                    Label("\(post.network == .x ? "Retweeted" : "Reposted") by \(by)",
-                          systemImage: "arrow.2.squarepath")
-                        .font(.caption).foregroundStyle(.secondary)
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button {
+                    open(PostRoute(postID: p.id, focusReply: true))
+                } label: {
+                    Label("Reply", systemImage: "bubble.left.fill")
                 }
-                HStack(spacing: 4) {
-                    Text(post.authorName).fontWeight(.bold).lineLimit(1)
-                    Text("@\(post.authorHandle)").foregroundStyle(.secondary).lineLimit(1)
-                    Text("· \(shortAge(post.createdAt))").foregroundStyle(.secondary).fixedSize()
-                    Spacer(minLength: 0)
-                    Text(post.network == .x ? "Twitter" : "Bluesky")
-                        .font(.system(size: 9, weight: .semibold))
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(Color.twitterBlue.opacity(0.15), in: Capsule())
-                        .foregroundStyle(Color.twitterBlue)
-                }
-                .font(.subheadline)
-
-                if !post.text.isEmpty {
-                    Text(linkified(post.text)).font(.body)
-                }
-                if !post.images.isEmpty {
-                    ImageGrid(urls: post.images).padding(.top, 2)
-                }
-                actions.padding(.top, 4)
+                .tint(theme.accent)
             }
-        }
+            .onAppear {
+                if p.id == lastID { Task { await store.loadMore(feed) } }
+            }
     }
-
-    private var actions: some View {
-        HStack {
-            Label(compact(post.replyCount), systemImage: "bubble.left")
-            Spacer()
-            Label(compact(post.repostCount), systemImage: "arrow.2.squarepath")
-            Spacer()
-            Label(compact(post.likeCount), systemImage: "heart")
-            Spacer()
-            Image(systemName: "bookmark")
-            Spacer()
-            if let url = post.url {
-                ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
-            }
-            Spacer()
-            Image(systemName: "ellipsis")
-        }
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .buttonStyle(.plain)
-    }
-}
-
-struct ImageGrid: View {
-    let urls: [URL]
-
-    var body: some View {
-        let shown = Array(urls.prefix(4))
-        if shown.count == 1 {
-            AsyncImage(url: shown[0]) { img in
-                img.resizable().scaledToFit()
-            } placeholder: {
-                Rectangle().fill(Color.gray.opacity(0.2)).frame(height: 220)
-            }
-            .frame(maxHeight: 420)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-        } else {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 4) {
-                ForEach(shown, id: \.self) { u in
-                    Color.clear
-                        .frame(height: shown.count == 2 ? 220 : 130)
-                        .overlay(
-                            AsyncImage(url: u) { img in
-                                img.resizable().scaledToFill()
-                            } placeholder: {
-                                Color.gray.opacity(0.2)
-                            }
-                        )
-                        .clipped()
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-        }
-    }
-}
-
-// MARK: - Formatting helpers
-
-func shortAge(_ d: Date) -> String {
-    let s = Int(Date().timeIntervalSince(d))
-    if s < 60 { return "now" }
-    if s < 3600 { return "\(s / 60)m" }
-    if s < 86_400 { return "\(s / 3600)h" }
-    if s < 86_400 * 7 { return "\(s / 86_400)d" }
-    return d.formatted(.dateTime.month(.abbreviated).day())
-}
-
-func compact(_ n: Int) -> String {
-    if n <= 0 { return "" }
-    if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
-    if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
-    return "\(n)"
-}
-
-func linkified(_ s: String) -> AttributedString {
-    let ms = NSMutableAttributedString(string: s)
-    if let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
-        for m in det.matches(in: s, range: NSRange(location: 0, length: (s as NSString).length)) {
-            if let url = m.url { ms.addAttribute(.link, value: url, range: m.range) }
-        }
-    }
-    return (try? AttributedString(ms)) ?? AttributedString(s)
 }

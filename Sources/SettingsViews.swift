@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var store: FeedStore
+    @EnvironmentObject var theme: Theme
     @State private var showXLogin = false
     @State private var showBskyLogin = false
 
@@ -32,6 +33,17 @@ struct SettingsView: View {
                 }
                 Section("Feeds") {
                     NavigationLink("Choose feeds") { FeedSettingsView() }
+                }
+                Section("Appearance") {
+                    NavigationLink {
+                        AccentPickerView()
+                    } label: {
+                        HStack {
+                            Text("Accent color")
+                            Spacer()
+                            Circle().fill(theme.accent).frame(width: 22, height: 22)
+                        }
+                    }
                 }
                 Section("About") {
                     Text("Personal client. Not affiliated with or endorsed by Twitter/X or Bluesky.")
@@ -150,6 +162,43 @@ struct FeedSettingsView: View {
         }
         .environment(\.editMode, .constant(.active))
         .navigationTitle("Choose feeds")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct AccentPickerView: View {
+    @EnvironmentObject var theme: Theme
+    private let columns = [GridItem(.adaptive(minimum: 56), spacing: 16)]
+
+    var body: some View {
+        Form {
+            Section {
+                LazyVGrid(columns: columns, spacing: 16) {
+                    ForEach(Theme.palette, id: \.hex) { item in
+                        Button {
+                            theme.hex = item.hex
+                        } label: {
+                            ZStack {
+                                Circle().fill(Color(hex: item.hex)).frame(width: 44, height: 44)
+                                if theme.hex.uppercased() == item.hex {
+                                    Image(systemName: "checkmark").font(.headline).foregroundStyle(.white)
+                                }
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel(item.name)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+            Section {
+                ColorPicker("Custom color", selection: Binding(
+                    get: { theme.accent },
+                    set: { theme.hex = $0.hexString }
+                ), supportsOpacity: false)
+            }
+        }
+        .navigationTitle("Accent color")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
