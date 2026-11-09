@@ -171,34 +171,32 @@ private extension View {
 
 struct ImageGrid: View {
     let urls: [URL]
+    @State private var viewer: GalleryItem?
 
     var body: some View {
         let shown = Array(urls.prefix(4))
-        if shown.count == 1 {
-            AsyncImage(url: shown[0]) { img in
-                img.resizable().scaledToFit()
-            } placeholder: {
-                Rectangle().fill(Color.gray.opacity(0.2)).frame(height: 220)
-            }
-            .frame(maxWidth: .infinity, maxHeight: 420, alignment: .leading)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-        } else {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 4) {
-                ForEach(shown, id: \.self) { u in
-                    Color.clear
-                        .frame(height: shown.count == 2 ? 220 : 130)
-                        .overlay(
-                            AsyncImage(url: u) { img in
-                                img.resizable().scaledToFill()
-                            } placeholder: {
-                                Color.gray.opacity(0.2)
-                            }
-                        )
-                        .clipped()
+        Group {
+            if shown.count == 1 {
+                CachedImage(url: shown[0])
+                    .frame(maxWidth: .infinity, maxHeight: 420, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { viewer = GalleryItem(id: 0) }
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 4), GridItem(.flexible(), spacing: 4)], spacing: 4) {
+                    ForEach(Array(shown.enumerated()), id: \.offset) { i, u in
+                        Color.clear
+                            .frame(height: shown.count == 2 ? 220 : 130)
+                            .overlay(CachedImage(url: u, fill: true))
+                            .clipped()
+                            .contentShape(Rectangle())
+                            .onTapGesture { viewer = GalleryItem(id: i) }
+                    }
                 }
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
+        .fullScreenCover(item: $viewer) { GalleryView(urls: urls, index: $0.id) }
     }
 }
 
