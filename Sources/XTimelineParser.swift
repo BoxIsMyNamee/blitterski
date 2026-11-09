@@ -91,6 +91,7 @@ enum XTimelineParser {
             ?? (dig(legacy, ["entities", "media"]) as? [[String: Any]]) ?? []
         var images: [URL] = []
         var videos: [PostVideo] = []
+        var imageRatio: CGFloat?
         for m in media {
             if let short = m["url"] as? String { text = text.replacingOccurrences(of: short, with: "") }
             let type = m["type"] as? String
@@ -105,7 +106,11 @@ enum XTimelineParser {
                     continue
                 }
             }
-            if let s = m["media_url_https"] as? String, let u = URL(string: s) { images.append(u) }
+            if let s = m["media_url_https"] as? String, let u = URL(string: s) {
+                if images.isEmpty, let w = dig(m, ["original_info", "width"]) as? Double,
+                   let h = dig(m, ["original_info", "height"]) as? Double, h > 0 { imageRatio = CGFloat(w / h) }
+                images.append(u)
+            }
         }
         text = decodeEntities(text).trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -119,7 +124,7 @@ enum XTimelineParser {
                     replyCount: legacy["reply_count"] as? Int ?? 0,
                     repostCount: legacy["retweet_count"] as? Int ?? 0,
                     likeCount: legacy["favorite_count"] as? Int ?? 0,
-                    images: images, videos: videos, repostedBy: repostedBy,
+                    images: images, videos: videos, imageRatio: imageRatio, repostedBy: repostedBy,
                     url: URL(string: "https://x.com/\(handle)/status/\(id)"),
                     liked: legacy["favorited"] as? Bool ?? false,
                     reposted: legacy["retweeted"] as? Bool ?? false)

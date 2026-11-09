@@ -59,6 +59,12 @@ struct BskyRecord: Decodable {
 struct BskyImage: Decodable {
     let thumb: String?
     let fullsize: String?
+    let aspectRatio: BskyRatio?
+}
+
+struct BskyRatio: Decodable {
+    let width: Double
+    let height: Double
 }
 
 final class BskyEmbed: Decodable {
@@ -324,7 +330,7 @@ actor BlueskyClient {
                     avatarURL: p.author.avatar.flatMap(URL.init(string:)),
                     text: p.record.text ?? "", createdAt: parseDate(p.indexedAt),
                     replyCount: p.replyCount ?? 0, repostCount: p.repostCount ?? 0, likeCount: p.likeCount ?? 0,
-                    images: imageURLs(p.embed), videos: videoList(p.embed),
+                    images: imageURLs(p.embed), videos: videoList(p.embed), imageRatio: ratio(p.embed),
                     repostedBy: repostedBy,
                     url: URL(string: "https://bsky.app/profile/\(p.author.handle)/post/\(rkey)"),
                     liked: p.viewer?.like != nil,
@@ -334,6 +340,12 @@ actor BlueskyClient {
                     repostRecord: p.viewer?.repost,
                     rootURI: p.record.reply?.root.uri ?? p.uri,
                     rootCID: p.record.reply?.root.cid ?? p.cid)
+    }
+
+    private static func ratio(_ e: BskyEmbed?) -> CGFloat? {
+        guard let e else { return nil }
+        if let r = e.images?.first?.aspectRatio, r.height > 0 { return CGFloat(r.width / r.height) }
+        return ratio(e.media)
     }
 
     private static func videoList(_ e: BskyEmbed?) -> [PostVideo] {

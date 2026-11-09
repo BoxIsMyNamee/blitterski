@@ -138,7 +138,6 @@ struct Player: View {
 struct VideoViewer: View {
     let video: PostVideo
     @State private var dragY: CGFloat = 0
-    @State private var confirmSave = false
     @State private var note: String?
     @Environment(\.dismiss) private var dismiss
 
@@ -159,9 +158,8 @@ struct VideoViewer: View {
                             }
                         }
                 )
-                .onLongPressGesture(minimumDuration: 0.45) {
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    confirmSave = true
+                .contextMenu {
+                    Button { Task { await save() } } label: { Label("Save to Photos", systemImage: "square.and.arrow.down") }
                 }
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
@@ -179,10 +177,6 @@ struct VideoViewer: View {
                     .background(Color.black.opacity(0.7), in: Capsule())
                     .padding(.bottom, 40)
             }
-        }
-        .confirmationDialog("Video", isPresented: $confirmSave, titleVisibility: .hidden) {
-            Button("Save to Photos") { Task { await save() } }
-            Button("Cancel", role: .cancel) {}
         }
     }
 

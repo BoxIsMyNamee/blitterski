@@ -244,6 +244,14 @@ struct FeedPage: View {
             }
         }
         .refreshable { await store.refresh(feed) }
+        .task(id: state.posts.count) {
+            // Warm the cache so images and avatars are already there when rows scroll in.
+            let urls = state.posts.prefix(40).flatMap { p in p.images + [p.avatarURL].compactMap { $0 } }
+            for u in urls where ImageLoader.shared.cached(u) == nil {
+                if Task.isCancelled { return }
+                _ = await ImageLoader.shared.load(u)
+            }
+        }
         .task(id: isActive) {
             if isActive && !store.state(for: feed).loadedOnce { await store.refresh(feed) }
         }

@@ -28,7 +28,7 @@ struct PostRow: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if !post.images.isEmpty {
-                        ImageGrid(urls: post.images).padding(.top, 2)
+                        ImageGrid(urls: post.images, ratio: post.imageRatio).padding(.top, 2)
                     }
                     ForEach(post.videos) { InlineVideo(video: $0).padding(.top, 2) }
                     PostActions(post: post, onReply: onReply).padding(.top, 4)
@@ -56,10 +56,8 @@ struct Avatar: View {
     let size: CGFloat
 
     var body: some View {
-        AsyncImage(url: url) { img in
-            img.resizable().scaledToFill()
-        } placeholder: {
-            Circle().fill(Color.gray.opacity(0.25))
+        Group {
+            if let url { CachedImage(url: url, fill: true) } else { Color.gray.opacity(0.25) }
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
@@ -172,14 +170,18 @@ private extension View {
 
 struct ImageGrid: View {
     let urls: [URL]
+    var ratio: CGFloat? = nil
     @State private var viewer: GalleryItem?
 
     var body: some View {
         let shown = Array(urls.prefix(4))
         Group {
             if shown.count == 1 {
-                CachedImage(url: shown[0])
-                    .frame(maxWidth: .infinity, maxHeight: 420, alignment: .leading)
+                Color.clear
+                    .aspectRatio(ratio ?? 4 / 3, contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: 420)
+                    .overlay(CachedImage(url: shown[0], fill: true))
+                    .clipped()
                     .contentShape(Rectangle())
                     .onTapGesture { viewer = GalleryItem(id: 0) }
                     .clipShape(RoundedRectangle(cornerRadius: 12))
