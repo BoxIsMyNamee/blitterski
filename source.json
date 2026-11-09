@@ -1,0 +1,19 @@
+{
+  "name": "Twitter (blitterski)",
+  "identifier": "com.boxismynamee.blitterski.source",
+  "subtitle": "Builds of the Twitter-themed client",
+  "apps": [
+    {
+      "name": "Twitter",
+      "bundleIdentifier": "com.boxismynamee.twitterclient",
+      "developerName": "BoxIsMyNamee",
+      "version": "1.0",
+      "versionDate": "2026-11-09",
+      "downloadURL": "https://github.com/BoxIsMyNamee/blitterski/releases/latest/download/Twitter.ipa",
+      "localizedDescription": "Personal Twitter-style timeline client.",
+      "iconURL": "https://raw.githubusercontent.com/BoxIsMyNamee/blitterski/main/Resources/Assets.xcassets/AppIcon.appiconset/icon.png",
+      "size": 0
+    }
+  ],
+  "news": []
+}
