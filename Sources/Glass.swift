@@ -29,6 +29,8 @@ final class Nav: ObservableObject {
     @Published var feed = ""
     @Published var showCompose = false
     @Published var hideBars = false
+    /// Extra scroll room needed under the custom floating bars (0 when the system tab bar is used).
+    @Published var bottomInset: CGFloat = 150
 }
 
 struct FloatingBars: View {
@@ -64,7 +66,7 @@ struct FloatingBars: View {
                             Button {
                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { nav.feed = f.id }
                             } label: {
-                                Text(f.title)
+                                Text(config.title(f))
                                     .font(.subheadline.weight(on ? .semibold : .regular))
                                     .foregroundStyle(on ? theme.accent : Color.primary)
                                     .lineLimit(1)
@@ -120,7 +122,8 @@ struct FloatingBars: View {
 // MARK: - Swipe row
 
 /// Light-touch swipe: a short pull reveals the action and registers on release.
-/// Right = like, left = reply. No full-swipe commit, no stiff threshold.
+/// Right = like, left = reply. The pan only begins for mostly-horizontal drags, so
+/// vertical scrolling is never blocked.
 struct SwipeRow<Content: View>: View {
     let liked: Bool
     let onLike: () -> Void
@@ -129,8 +132,6 @@ struct SwipeRow<Content: View>: View {
 
     @EnvironmentObject var theme: Theme
     @State private var dx: CGFloat = 0
-    @State private var engaged = false
-    @State private var rejected = false
     @State private var armed = false
 
     private let trigger: CGFloat = 40
@@ -140,7 +141,26 @@ struct SwipeRow<Content: View>: View {
             .background(Color(.systemBackground))
             .offset(x: dx)
             .background(alignment: dx >= 0 ? .leading : .trailing) { reveal }
-            .simultaneousGesture(drag)
+            .background(SwipeCatcher(onChange: change, onEnd: end))
+    }
+
+    private func change(_ t: CGFloat) {
+        let a = abs(t)
+        let eased = a <= trigger ? a : trigger + (a - trigger) * 0.35
+        dx = t < 0 ? -eased : eased
+        let now = a >= trigger
+        if now != armed {
+            armed = now
+            if now { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        }
+    }
+
+    private func end() {
+        let fire = armed
+        let right = dx > 0
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { dx = 0 }
+        armed = false
+        if fire { if right { onLike() } else { onReply() } }
     }
 
     private var reveal: some View {
@@ -156,33 +176,75 @@ struct SwipeRow<Content: View>: View {
         }
         .animation(.easeOut(duration: 0.12), value: on)
     }
+}
 
-    private var drag: some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { v in
-                if rejected { return }
-                if !engaged {
-                    // Decide once: mostly-horizontal drags are ours, vertical ones belong to the scroll view.
-                    if abs(v.translation.height) > abs(v.translation.width) { rejected = true; return }
-                    engaged = true
-                }
-                let t = v.translation.width
-                // Gentle resistance past the trigger point.
-                let a = abs(t)
-                let eased = a <= trigger ? a : trigger + (a - trigger) * 0.35
-                dx = t < 0 ? -eased : eased
-                let nowArmed = a >= trigger
-                if nowArmed != armed {
-                    armed = nowArmed
-                    if nowArmed { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-                }
+/// Attaches a horizontal-only pan recognizer to the enclosing scroll view, scoped to this row's frame.
+struct SwipeCatcher: UIViewRepresentable {
+    let onChange: (CGFloat) -> Void
+    let onEnd: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> Probe {
+        let v = Probe()
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        v.onWindow = { [weak c = context.coordinator, weak v] in if let c, let v { c.attach(to: v) } }
+        return v
+    }
+
+    func updateUIView(_ uiView: Probe, context: Context) {
+        context.coordinator.onChange = onChange
+        context.coordinator.onEnd = onEnd
+    }
+
+    static func dismantleUIView(_ uiView: Probe, coordinator: Coordinator) { coordinator.detach() }
+
+    final class Probe: UIView {
+        var onWindow: (() -> Void)?
+        override func didMoveToWindow() { super.didMoveToWindow(); if window != nil { onWindow?() } }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onChange: (CGFloat) -> Void = { _ in }
+        var onEnd: () -> Void = {}
+        private weak var probe: UIView?
+        private weak var host: UIView?
+        private var pan: UIPanGestureRecognizer?
+
+        func attach(to v: UIView) {
+            probe = v
+            guard pan == nil else { return }
+            var cur: UIView? = v.superview
+            while let c = cur, !(c is UIScrollView) { cur = c.superview }
+            guard let scroll = cur else { return }
+            let g = UIPanGestureRecognizer(target: self, action: #selector(handle(_:)))
+            g.delegate = self
+            g.cancelsTouchesInView = true
+            scroll.addGestureRecognizer(g)
+            pan = g; host = scroll
+        }
+
+        func detach() {
+            if let g = pan { host?.removeGestureRecognizer(g) }
+            pan = nil
+        }
+
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard let pan = g as? UIPanGestureRecognizer, let probe else { return false }
+            let p = pan.location(in: probe)
+            guard probe.bounds.contains(p) else { return false }
+            let vel = pan.velocity(in: probe)
+            return abs(vel.x) > abs(vel.y) * 1.4
+        }
+
+        @objc func handle(_ g: UIPanGestureRecognizer) {
+            guard let probe else { return }
+            switch g.state {
+            case .changed: onChange(g.translation(in: probe).x)
+            case .ended, .cancelled, .failed: onEnd()
+            default: break
             }
-            .onEnded { _ in
-                let fire = engaged && armed
-                let right = dx > 0
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { dx = 0 }
-                engaged = false; rejected = false; armed = false
-                if fire { right ? onLike() : onReply() }
-            }
+        }
     }
 }

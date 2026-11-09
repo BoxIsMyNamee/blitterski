@@ -127,11 +127,23 @@ struct BskyLoginSheet: View {
 struct FeedSettingsView: View {
     @EnvironmentObject var store: FeedStore
     @EnvironmentObject var config: FeedConfig
+    @State private var renaming: FeedDef?
+    @State private var draft = ""
 
     var body: some View {
         List {
             Section {
-                ForEach(config.shown) { f in Text(f.title) }
+                ForEach(config.shown) { f in
+                    HStack {
+                        Text(config.title(f))
+                        Spacer()
+                        Button {
+                            draft = config.names[f.id] ?? config.title(f)
+                            renaming = f
+                        } label: { Image(systemName: "pencil") }
+                            .buttonStyle(.borderless)
+                    }
+                }
                     .onMove { config.shown.move(fromOffsets: $0, toOffset: $1) }
                     .onDelete { config.shown.remove(atOffsets: $0) }
             } header: {
@@ -160,6 +172,21 @@ struct FeedSettingsView: View {
                 Text("Adds the custom feeds you've saved on Bluesky to the Available list.")
             }
         }
+        .alert("Rename feed", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $draft)
+            Button("Save") {
+                if let f = renaming {
+                    let t = draft.trimmingCharacters(in: .whitespaces)
+                    config.names[f.id] = t.isEmpty ? nil : t
+                }
+                renaming = nil
+            }
+            Button("Reset to default") {
+                if let f = renaming { config.names[f.id] = nil }
+                renaming = nil
+            }
+            Button("Cancel", role: .cancel) { renaming = nil }
+        } message: { Text("Only changes the name inside this app.") }
         .environment(\.editMode, .constant(.active))
         .navigationTitle("Choose feeds")
         .navigationBarTitleDisplayMode(.inline)

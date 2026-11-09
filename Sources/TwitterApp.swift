@@ -18,13 +18,48 @@ struct TwitterApp: App {
     }
 }
 
-/// Floating Liquid Glass tab bar plus a feed switcher pill above it.
-/// All tabs stay alive so Home keeps its scroll position.
+/// iOS 26.1+: the system TabView, which gives the real Liquid Glass tab bar (with the sliding
+/// lens on the selected tab), plus the feed switcher as its bottom accessory.
+/// Older iOS: custom floating bars.
 struct RootView: View {
     @EnvironmentObject var store: FeedStore
     @StateObject private var nav = Nav()
 
     var body: some View {
+        content
+            .environmentObject(nav)
+            .sheet(isPresented: $nav.showCompose) { ComposeView() }
+            .overlay(alignment: .top) {
+                if let t = store.toast {
+                    Text(t)
+                        .font(.footnote)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .glass(in: RoundedRectangle(cornerRadius: 14))
+                        .padding(.top, 8).padding(.horizontal, 16)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut, value: store.toast)
+            .task(id: store.toast) {
+                guard store.toast != nil else { return }
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                store.toast = nil
+            }
+    }
+
+    @ViewBuilder private var content: some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26.1, *) {
+            NativeRoot().onAppear { nav.bottomInset = 0 }
+        } else {
+            customRoot
+        }
+        #else
+        customRoot
+        #endif
+    }
+
+    private var customRoot: some View {
         ZStack {
             page(0) { HomeView(openSettings: { nav.tab = 4 }) }
             page(1) { PlaceholderView(title: "Search") }
@@ -33,30 +68,76 @@ struct RootView: View {
             page(4) { SettingsView().safeAreaInset(edge: .bottom) { Color.clear.frame(height: 84) } }
         }
         .overlay(alignment: .bottom) { FloatingBars() }
-        .environmentObject(nav)
-        .sheet(isPresented: $nav.showCompose) { ComposeView() }
-        .overlay(alignment: .top) {
-            if let t = store.toast {
-                Text(t)
-                    .font(.footnote)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .glass(in: RoundedRectangle(cornerRadius: 14))
-                    .padding(.top, 8).padding(.horizontal, 16)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .animation(.easeInOut, value: store.toast)
-        .task(id: store.toast) {
-            guard store.toast != nil else { return }
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            store.toast = nil
-        }
     }
 
     private func page<V: View>(_ i: Int, @ViewBuilder _ v: () -> V) -> some View {
         v().opacity(nav.tab == i ? 1 : 0).allowsHitTesting(nav.tab == i)
     }
 }
+
+#if compiler(>=6.2)
+@available(iOS 26.1, *)
+struct NativeRoot: View {
+    @EnvironmentObject var nav: Nav
+
+    var body: some View {
+        TabView(selection: $nav.tab) {
+            HomeView(openSettings: { nav.tab = 4 })
+                .tabItem { Label("Home", systemImage: "house.fill") }.tag(0)
+            PlaceholderView(title: "Search")
+                .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(1)
+            PlaceholderView(title: "Messages")
+                .tabItem { Label("Messages", systemImage: "bubble.left.and.bubble.right.fill") }.tag(2)
+            PlaceholderView(title: "Notifications")
+                .tabItem { Label("Alerts", systemImage: "bell.fill") }.tag(3)
+            SettingsView()
+                .tabItem { Label("Me", systemImage: "person.crop.circle.fill") }.tag(4)
+        }
+        .tabViewBottomAccessory(isEnabled: nav.tab == 0) { FeedAccessory() }
+    }
+}
+
+@available(iOS 26.1, *)
+struct FeedAccessory: View {
+    @EnvironmentObject var nav: Nav
+    @EnvironmentObject var config: FeedConfig
+    @EnvironmentObject var theme: Theme
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(config.shown) { f in
+                            let on = nav.feed == f.id
+                            Button {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { nav.feed = f.id }
+                            } label: {
+                                Text(config.title(f))
+                                    .font(.subheadline.weight(on ? .semibold : .regular))
+                                    .foregroundStyle(on ? theme.accent : Color.primary)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 12).padding(.vertical, 6)
+                                    .background(on ? theme.accent.opacity(0.18) : Color.clear, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .id(f.id)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                }
+                .onChange(of: nav.feed) { id in withAnimation { proxy.scrollTo(id, anchor: .center) } }
+            }
+            Button { nav.showCompose = true } label: {
+                Image(systemName: "square.and.pencil")
+                    .font(.headline).foregroundStyle(theme.accent)
+                    .frame(width: 44, height: 36)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+#endif
 
 struct PlaceholderView: View {
     let title: String
@@ -103,7 +184,7 @@ struct HomeView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: PostRoute.self) { PostDetailView(route: $0) }
+            .navigationDestination(for: PostRoute.self) { PostDetailView(route: $0).toolbar(.hidden, for: .tabBar) }
         }
         .onAppear(perform: ensureSelection)
         .onChange(of: config.shown) { _ in ensureSelection() }
@@ -137,6 +218,7 @@ struct FeedPage: View {
     let open: (PostRoute) -> Void
     @EnvironmentObject var store: FeedStore
     @EnvironmentObject var theme: Theme
+    @EnvironmentObject var nav: Nav
 
     var body: some View {
         let state = store.state(for: feed)
@@ -158,7 +240,7 @@ struct FeedPage: View {
                 if state.loading && !state.posts.isEmpty {
                     ProgressView().frame(maxWidth: .infinity).padding()
                 }
-                Color.clear.frame(height: 150) // room under the floating bars
+                Color.clear.frame(height: nav.bottomInset) // room under the custom floating bars
             }
         }
         .refreshable { await store.refresh(feed) }

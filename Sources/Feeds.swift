@@ -31,7 +31,16 @@ final class FeedConfig: ObservableObject {
     /// Bluesky custom feeds fetched from the user's account (offered as "available").
     @Published var extra: [FeedDef] { didSet { Self.save(extra, "feeds.extra") } }
 
+    /// In-app-only display names, keyed by feed id.
+    @Published var names: [String: String] { didSet { Self.save(names, "feeds.names") } }
+
+    func title(_ f: FeedDef) -> String {
+        let n = names[f.id]?.trimmingCharacters(in: .whitespaces) ?? ""
+        return n.isEmpty ? f.title : n
+    }
+
     init() {
+        names = Self.load("feeds.names") ?? [:]
         shown = Self.load("feeds.shown") ?? FeedDef.builtins
         extra = Self.load("feeds.extra") ?? []
     }
