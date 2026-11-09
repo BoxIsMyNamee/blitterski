@@ -24,6 +24,7 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         ITSAppUsesNonExemptEncryption: false
+        NSPhotoLibraryAddUsageDescription: Save photos from posts to your library.
     settings:
       base:
         PRODUCT_NAME: Twitter
