@@ -1,59 +1,22 @@
 import SwiftUI
 import WebKit
-import Security
 
 struct XCredentials: Codable {
     let authToken: String
     let ct0: String
 }
 
-/// Shared so the login webview and the API client look like the same browser.
+/// Shared so the login webview and the timeline webview look like the same browser.
 let xUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
-enum XKeychain {
-    private static func base() -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "xspike",
-         kSecAttrAccount as String: "x.credentials"]
-    }
-
-    // Sideload containers (LiveContainer etc.) can make the Keychain flaky,
-    // so fall back to UserDefaults if it refuses.
-    private static let fallbackKey = "x.credentials.fallback"
-
-    static func save(_ c: XCredentials) throws {
-        let data = try JSONEncoder().encode(c)
-        SecItemDelete(base() as CFDictionary)
-        var add = base()
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        let s = SecItemAdd(add as CFDictionary, nil)
-        if s != errSecSuccess { UserDefaults.standard.set(data, forKey: fallbackKey) }
-    }
-
-    static func load() -> XCredentials? {
-        var q = base()
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-           let d = out as? Data, let c = try? JSONDecoder().decode(XCredentials.self, from: d) {
-            return c
-        }
-        if let d = UserDefaults.standard.data(forKey: fallbackKey) {
-            return try? JSONDecoder().decode(XCredentials.self, from: d)
-        }
-        return nil
-    }
-
-    static func clear() {
-        SecItemDelete(base() as CFDictionary)
-        UserDefaults.standard.removeObject(forKey: fallbackKey)
-    }
+enum XSession {
+    static let key = "x.credentials"
+    static func load() -> XCredentials? { Secrets.load(XCredentials.self, key: key) }
 }
 
 /// Shows X's real login page (handles captcha / 2FA / whatever X throws at us),
 /// then lifts auth_token + ct0 out of the webview's cookie store.
+/// The cookies stay in the shared default data store, which is what the timeline webview uses.
 struct XLoginView: UIViewRepresentable {
     let onLogin: (XCredentials) -> Void
 

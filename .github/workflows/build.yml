@@ -22,6 +22,7 @@ jobs:
 
       - name: Build (unsigned)
         run: |
+          set -o pipefail
           xcodebuild \
             -project TwitterApp.xcodeproj \
             -scheme TwitterApp \
@@ -30,7 +31,11 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build
+            build 2>&1 | tee build.log || {
+              # Surface compiler errors as run annotations (visible without opening logs).
+              grep -E "error:" build.log | sort -u | head -15 | while read -r l; do echo "::error::$l"; done
+              exit 1
+            }
 
       - name: Package IPA
         run: |

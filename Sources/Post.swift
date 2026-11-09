@@ -1,8 +1,8 @@
 import Foundation
 
-enum Network: String { case x, bluesky }
+enum Network: String, Codable { case x, bluesky }
 
-/// Network-agnostic post. Both X and Bluesky sources map into this so the merged feed is trivial.
+/// Network-agnostic post. Both X and Bluesky map into this so merged feeds are trivial.
 struct Post: Identifiable, Hashable {
     let id: String
     let network: Network
@@ -11,12 +11,10 @@ struct Post: Identifiable, Hashable {
     let avatarURL: URL?
     let text: String
     let createdAt: Date
-    let likeCount: Int
-    let repostCount: Int
+    var replyCount: Int = 0
+    var repostCount: Int = 0
+    var likeCount: Int = 0
+    var images: [URL] = []
     var repostedBy: String? = nil
-}
-
-/// Each network implements this. Keeps X's breakage isolated from Bluesky.
-protocol FeedSource {
-    func fetchHome(cursor: String?) async throws -> (posts: [Post], nextCursor: String?)
+    var url: URL? = nil
 }
