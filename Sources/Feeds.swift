@@ -105,7 +105,7 @@ final class FeedStore: ObservableObject {
         do {
             let r = try await fetchPage(feed, more: false, cursor: nil)
             update(feed) {
-                $0.posts = Self.order(r.posts, feed)
+                $0.posts = Self.order(Self.unique(r.posts), feed)
                 $0.bskyCursor = r.cursor
                 $0.canLoadMore = true
                 $0.loadedOnce = true
@@ -125,7 +125,7 @@ final class FeedStore: ObservableObject {
             update(feed) { st in
                 let known = Set(st.posts.map(\.id))
                 let fresh = r.posts.filter { !known.contains($0.id) }
-                st.posts = Self.order(st.posts + fresh, feed)
+                st.posts = Self.order(Self.unique(st.posts + fresh), feed)
                 st.bskyCursor = r.cursor
                 if fresh.isEmpty && r.cursor == nil { st.canLoadMore = false }
             }
@@ -133,6 +133,12 @@ final class FeedStore: ObservableObject {
             update(feed) { $0.canLoadMore = false }
         }
         update(feed) { $0.loading = false }
+    }
+
+    /// Duplicate ids (a post reposted twice, overlapping pages) make SwiftUI lists misbehave.
+    private static func unique(_ posts: [Post]) -> [Post] {
+        var seen = Set<String>()
+        return posts.filter { seen.insert($0.id).inserted }
     }
 
     private static func order(_ posts: [Post], _ feed: FeedDef) -> [Post] {

@@ -4,16 +4,51 @@ import UIKit
 /// Small shared image cache so thumbnails and the full-screen viewer don't re-download.
 final class ImageLoader {
     static let shared = ImageLoader()
-    private let cache = NSCache<NSURL, UIImage>()
+    private let cache: NSCache<NSURL, UIImage> = {
+        let c = NSCache<NSURL, UIImage>()
+        c.totalCostLimit = 300 * 1024 * 1024
+        return c
+    }()
+    private let lock = NSLock()
+    private var inflight: [URL: Task<UIImage?, Never>] = [:]
 
     func cached(_ url: URL) -> UIImage? { cache.object(forKey: url as NSURL) }
 
+    /// Downloads once even if many views ask, and decodes off the main thread so scrolling doesn't hitch.
     func load(_ url: URL) async -> UIImage? {
         if let c = cached(url) { return c }
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let img = UIImage(data: data) else { return nil }
-        cache.setObject(img, forKey: url as NSURL)
-        return img
+        lock.lock()
+        let task: Task<UIImage?, Never>
+        if let t = inflight[url] {
+            task = t
+        } else {
+            task = Task.detached(priority: .userInitiated) { [cache] in
+                guard let (data, _) = try? await URLSession.shared.data(from: url),
+                      let raw = UIImage(data: data) else { return nil }
+                let img = await raw.byPreparingForDisplay() ?? raw
+                let cost = Int(img.size.width * img.scale * img.size.height * img.scale * 4)
+                cache.setObject(img, forKey: url as NSURL, cost: cost)
+                return img
+            }
+            inflight[url] = task
+        }
+        lock.unlock()
+        let result = await task.value
+        lock.lock(); inflight[url] = nil; lock.unlock()
+        return result
+    }
+
+    /// Fetch a batch ahead of time, a few at a time.
+    func prefetch(_ urls: [URL]) async {
+        let todo = urls.filter { cached($0) == nil }
+        await withTaskGroup(of: Void.self) { g in
+            var it = todo.makeIterator()
+            for _ in 0..<4 { if let u = it.next() { g.addTask { _ = await self.load(u) } } }
+            while await g.next() != nil {
+                if Task.isCancelled { g.cancelAll(); return }
+                if let u = it.next() { g.addTask { _ = await self.load(u) } }
+            }
+        }
     }
 
     /// Full-size variant for X media (pbs.twimg.com serves ?name=large).
@@ -30,6 +65,12 @@ struct CachedImage: View {
     var fill = false
     @State private var image: UIImage?
 
+    init(url: URL, fill: Bool = false) {
+        self.url = url
+        self.fill = fill
+        _image = State(initialValue: ImageLoader.shared.cached(url)) // no gray flash for cached images
+    }
+
     var body: some View {
         Group {
             if let image {
@@ -40,7 +81,7 @@ struct CachedImage: View {
             }
         }
         .task(id: url) {
-            image = ImageLoader.shared.cached(url)
+            if let c = ImageLoader.shared.cached(url) { image = c }
             if image == nil {
                 let img = await ImageLoader.shared.load(url)
                 withAnimation(.easeIn(duration: 0.15)) { image = img }

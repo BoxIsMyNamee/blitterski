@@ -246,11 +246,10 @@ struct FeedPage: View {
         .refreshable { await store.refresh(feed) }
         .task(id: state.posts.count) {
             // Warm the cache so images and avatars are already there when rows scroll in.
-            let urls = state.posts.prefix(40).flatMap { p in p.images + [p.avatarURL].compactMap { $0 } }
-            for u in urls where ImageLoader.shared.cached(u) == nil {
-                if Task.isCancelled { return }
-                _ = await ImageLoader.shared.load(u)
+            let urls = state.posts.prefix(60).flatMap { p in
+                [p.avatarURL].compactMap { $0 } + p.images + p.videos.compactMap(\.poster)
             }
+            await ImageLoader.shared.prefetch(urls)
         }
         .task(id: isActive) {
             if isActive && !store.state(for: feed).loadedOnce { await store.refresh(feed) }

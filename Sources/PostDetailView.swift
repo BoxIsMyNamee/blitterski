@@ -33,6 +33,7 @@ struct PostDetailView: View {
                 }
                 if !post.images.isEmpty { ImageGrid(urls: post.images, ratio: post.imageRatio) }
                 ForEach(post.videos) { InlineVideo(video: $0) }
+                if let q = post.quote { QuoteCard(quote: q) }
                 Text(post.createdAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.footnote).foregroundStyle(.secondary)
 

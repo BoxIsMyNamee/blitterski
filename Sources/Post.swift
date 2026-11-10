@@ -16,6 +16,7 @@ struct Post: Identifiable, Hashable {
     var likeCount: Int = 0
     var images: [URL] = []
     var videos: [PostVideo] = []
+    var quote: QuotedPost? = nil
     var imageRatio: CGFloat? = nil   // width/height of the first image, to reserve space before it loads
     var repostedBy: String? = nil
     var url: URL? = nil
@@ -30,6 +31,13 @@ struct Post: Identifiable, Hashable {
     var repostRecord: String? = nil
     var rootURI: String? = nil
     var rootCID: String? = nil
+}
+
+struct QuotedPost: Hashable {
+    let name: String
+    let handle: String
+    let avatar: URL?
+    let text: String
 }
 
 struct PostVideo: Hashable, Identifiable {

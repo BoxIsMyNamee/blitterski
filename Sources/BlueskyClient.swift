@@ -71,7 +71,24 @@ final class BskyEmbed: Decodable {
     let images: [BskyImage]?
     let thumbnail: String?   // video poster
     let playlist: String?    // video HLS playlist
+    let record: BskyRecordView? // quoted post (record / recordWithMedia)
     let media: BskyEmbed?    // recordWithMedia
+}
+
+final class BskyRecordView: Decodable {
+    let uri: String?
+    let author: BskyAuthor?
+    let text: String?
+    let record: BskyRecordView?
+    enum K: String, CodingKey { case uri, author, value, record }
+    // Tolerant on purpose: quoted records can be posts, lists, feeds or blocked, and must never break a feed decode.
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: K.self)
+        uri = try? c.decode(String.self, forKey: .uri)
+        author = try? c.decode(BskyAuthor.self, forKey: .author)
+        text = (try? c.decode(BskyRecord.self, forKey: .value))?.text
+        record = try? c.decode(BskyRecordView.self, forKey: .record)
+    }
 }
 
 struct BskyViewer: Decodable {
@@ -330,7 +347,7 @@ actor BlueskyClient {
                     avatarURL: p.author.avatar.flatMap(URL.init(string:)),
                     text: p.record.text ?? "", createdAt: parseDate(p.indexedAt),
                     replyCount: p.replyCount ?? 0, repostCount: p.repostCount ?? 0, likeCount: p.likeCount ?? 0,
-                    images: imageURLs(p.embed), videos: videoList(p.embed), imageRatio: ratio(p.embed),
+                    images: imageURLs(p.embed), videos: videoList(p.embed), quote: quote(p.embed), imageRatio: ratio(p.embed),
                     repostedBy: repostedBy,
                     url: URL(string: "https://bsky.app/profile/\(p.author.handle)/post/\(rkey)"),
                     liked: p.viewer?.like != nil,
@@ -340,6 +357,14 @@ actor BlueskyClient {
                     repostRecord: p.viewer?.repost,
                     rootURI: p.record.reply?.root.uri ?? p.uri,
                     rootCID: p.record.reply?.root.cid ?? p.cid)
+    }
+
+    private static func quote(_ e: BskyEmbed?) -> QuotedPost? {
+        guard let r = e?.record else { return nil }
+        let v = r.author == nil ? r.record : r
+        guard let v, let a = v.author, let t = v.text else { return nil }
+        return QuotedPost(name: (a.displayName?.isEmpty == false) ? a.displayName! : a.handle,
+                          handle: a.handle, avatar: a.avatar.flatMap(URL.init(string:)), text: t)
     }
 
     private static func ratio(_ e: BskyEmbed?) -> CGFloat? {

@@ -81,9 +81,23 @@ enum XTimelineParser {
         var text = (note?["text"] as? String) ?? (legacy["full_text"] as? String) ?? ""
         var urlEntities = (dig(legacy, ["entities", "urls"]) as? [[String: Any]]) ?? []
         if let n = note, let more = dig(n, ["entity_set", "urls"]) as? [[String: Any]] { urlEntities += more }
+        // Quoted tweet, shown as a card instead of a trailing link.
+        var quote: QuotedPost?
+        var quoteID: String?
+        if var q = dig(r, ["quoted_status_result", "result"]) as? [String: Any] {
+            if let inner = q["tweet"] as? [String: Any] { q = inner }
+            if let qp = post(from: q) {
+                quote = QuotedPost(name: qp.authorName, handle: qp.authorHandle, avatar: qp.avatarURL, text: qp.text)
+                quoteID = qp.id
+            }
+        }
         for u in urlEntities {
             if let short = u["url"] as? String, let full = u["expanded_url"] as? String {
-                text = text.replacingOccurrences(of: short, with: full)
+                if let qid = quoteID, full.contains("/status/\(qid)") {
+                    text = text.replacingOccurrences(of: short, with: "")
+                } else {
+                    text = text.replacingOccurrences(of: short, with: full)
+                }
             }
         }
 
@@ -124,7 +138,7 @@ enum XTimelineParser {
                     replyCount: legacy["reply_count"] as? Int ?? 0,
                     repostCount: legacy["retweet_count"] as? Int ?? 0,
                     likeCount: legacy["favorite_count"] as? Int ?? 0,
-                    images: images, videos: videos, imageRatio: imageRatio, repostedBy: repostedBy,
+                    images: images, videos: videos, quote: quote, imageRatio: imageRatio, repostedBy: repostedBy,
                     url: URL(string: "https://x.com/\(handle)/status/\(id)"),
                     liked: legacy["favorited"] as? Bool ?? false,
                     reposted: legacy["retweeted"] as? Bool ?? false)

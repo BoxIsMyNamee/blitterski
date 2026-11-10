@@ -31,6 +31,7 @@ struct PostRow: View {
                         ImageGrid(urls: post.images, ratio: post.imageRatio).padding(.top, 2)
                     }
                     ForEach(post.videos) { InlineVideo(video: $0).padding(.top, 2) }
+                    if let q = post.quote { QuoteCard(quote: q).padding(.top, 2) }
                     PostActions(post: post, onReply: onReply).padding(.top, 4)
                 }
             }
@@ -229,4 +230,25 @@ func linkified(_ s: String) -> AttributedString {
         }
     }
     return (try? AttributedString(ms)) ?? AttributedString(s)
+}
+
+struct QuoteCard: View {
+    let quote: QuotedPost
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                if let a = quote.avatar { Avatar(url: a, size: 18) }
+                Text(quote.name).fontWeight(.semibold).lineLimit(1)
+                Text("@\(quote.handle)").foregroundStyle(.secondary).lineLimit(1)
+            }
+            .font(.footnote)
+            if !quote.text.isEmpty {
+                Text(quote.text).font(.subheadline).lineLimit(6)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.gray.opacity(0.35), lineWidth: 1))
+    }
 }
