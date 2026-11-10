@@ -141,8 +141,20 @@ final class FeedStore: ObservableObject {
         return posts.filter { seen.insert($0.id).inserted }
     }
 
+    /// Alternates Twitter and Bluesky posts 1:1. If one side has far more, the surplus is trimmed
+    /// so the feed stays an even mix instead of tailing off into one network.
+    private static func mix(_ x: [Post], _ b: [Post]) -> [Post] {
+        if x.isEmpty || b.isEmpty { return x + b }
+        let n = min(x.count, b.count)
+        var out: [Post] = []
+        for i in 0..<n { out.append(x[i]); out.append(b[i]) }
+        out += x.dropFirst(n).prefix(2)
+        out += b.dropFirst(n).prefix(2)
+        return out
+    }
+
     private static func order(_ posts: [Post], _ feed: FeedDef) -> [Post] {
-        feed.kind == .combined ? posts.sorted { $0.createdAt > $1.createdAt } : posts
+        posts // combined pages are already interleaved; appended pages keep their place
     }
 
     private func fetchPage(_ feed: FeedDef, more: Bool, cursor: String?) async throws -> (posts: [Post], cursor: String?) {
@@ -163,7 +175,7 @@ final class FeedStore: ObservableObject {
             let (xp, xerr) = await xr
             let (bres, berr) = await br
             if xp.isEmpty && bres.posts.isEmpty, let e = xerr ?? berr { throw e }
-            return (xp + bres.posts, bres.cursor)
+            return (Self.mix(xp, bres.posts.shuffled()), bres.cursor)
         }
     }
 
