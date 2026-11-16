@@ -89,17 +89,27 @@ struct MuteButton: View {
     }
 }
 
+private struct MediaActiveKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+    /// False for feed pages that are hidden (other tab, other feed, a post pushed on top).
+    var mediaActive: Bool {
+        get { self[MediaActiveKey.self] }
+        set { self[MediaActiveKey.self] = newValue }
+    }
+}
+
 /// Autoplays (muted by default) and loops while on screen; tap opens the full-screen viewer.
 struct InlineVideo: View {
     let video: PostVideo
     @State private var active = false
     @State private var viewing: PostVideo?
+    @Environment(\.mediaActive) private var mediaActive
 
     var body: some View {
         ZStack {
-            if active { Player(video: video, inline: true) }
-            else if let p = video.poster { CachedImage(url: p, fill: true) }
-            else { Color.gray.opacity(0.2) }
+            // Poster stays underneath so nothing pops in; the player draws over it once it has a frame.
+            if let p = video.poster { CachedImage(url: p) } else { Color.gray.opacity(0.2) }
+            if active && mediaActive { Player(video: video, inline: true) }
         }
         .aspectRatio(16 / 9, contentMode: .fit)
         .frame(maxWidth: .infinity)

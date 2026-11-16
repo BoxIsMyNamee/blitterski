@@ -185,6 +185,7 @@ struct HomeView: View {
                             FeedPage(feed: f, isActive: f.id == nav.feed, open: { path.append($0) })
                                 .opacity(f.id == nav.feed ? 1 : 0)
                                 .allowsHitTesting(f.id == nav.feed)
+                                .environment(\.mediaActive, f.id == nav.feed && nav.tab == 0 && !nav.hideBars)
                         }
                     }
                 }

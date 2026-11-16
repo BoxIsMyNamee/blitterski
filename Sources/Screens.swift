@@ -35,6 +35,7 @@ struct SearchView: View {
             .onSubmit(of: .search) { Task { await store.search(query) } }
             .navigationDestination(for: PostRoute.self) { PostDetailView(route: $0).toolbar(.hidden, for: .tabBar) }
         }
+        .environment(\.mediaActive, nav.tab == 1 && !nav.hideBars)
         .onChange(of: path) { p in nav.hideBars = !p.isEmpty }
     }
 }
