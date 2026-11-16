@@ -59,6 +59,16 @@ final class FeedConfig: ObservableObject {
     }
 }
 
+struct NotifItem: Identifiable {
+    let id: String
+    let reason: String
+    let name: String
+    let handle: String
+    let avatar: URL?
+    let date: Date
+    let postID: String?
+}
+
 // MARK: - Feed loading
 
 @MainActor
@@ -78,6 +88,11 @@ final class FeedStore: ObservableObject {
     @Published var xConnected: Bool
     @Published var bskyHandle: String? = nil
     @Published var toast: String? = nil
+    @Published var notifs: [NotifItem] = []
+    @Published var notifLoading = false
+    @Published var notifError: String?
+    @Published var searchError: String?
+    @Published var searching = false
 
     let x = XWebSource()
     let xActions = XActionRunner()
@@ -234,6 +249,42 @@ final class FeedStore: ObservableObject {
         guard bskyHandle != nil else { return (([], nil), nil) }
         do { return (try await bsky.timeline(cursor: cursor), nil) }
         catch { return (([], cursor), error) }
+    }
+
+    // MARK: Search and notifications (Bluesky)
+
+    func search(_ q: String) async {
+        let query = q.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return }
+        searching = true; searchError = nil
+        do {
+            var st = State(); st.posts = try await bsky.search(query: query); st.loadedOnce = true
+            states["search"] = st
+        } catch {
+            searchError = bskyHandle == nil ? "Sign in to Bluesky in Settings to search." : error.localizedDescription
+        }
+        searching = false
+    }
+
+    func loadNotifications() async {
+        guard bskyHandle != nil else { notifError = "Sign in to Bluesky in Settings to see notifications."; return }
+        notifLoading = true; notifError = nil
+        do {
+            let r = try await bsky.notifications()
+            var st = State(); st.posts = r.posts; st.loadedOnce = true
+            states["notif"] = st
+            let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            notifs = r.items.map { n in
+                NotifItem(id: n.uri + n.reason, reason: n.reason,
+                          name: (n.author.displayName?.isEmpty == false) ? n.author.displayName! : n.author.handle,
+                          handle: n.author.handle, avatar: n.author.avatar.flatMap(URL.init(string:)),
+                          date: f.date(from: n.indexedAt) ?? ISO8601DateFormatter().date(from: n.indexedAt) ?? Date(),
+                          postID: ["reply", "mention", "quote"].contains(n.reason) ? n.uri : nil)
+            }
+        } catch {
+            notifError = error.localizedDescription
+        }
+        notifLoading = false
     }
 
     // MARK: Lookup

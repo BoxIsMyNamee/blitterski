@@ -68,9 +68,9 @@ struct RootView: View {
     private var customRoot: some View {
         ZStack {
             page(0) { HomeView(openSettings: { nav.tab = 4 }) }
-            page(1) { PlaceholderView(title: "Search") }
+            page(1) { SearchView() }
             page(2) { PlaceholderView(title: "Messages") }
-            page(3) { PlaceholderView(title: "Notifications") }
+            page(3) { NotificationsView() }
             page(4) { SettingsView().safeAreaInset(edge: .bottom) { Color.clear.frame(height: 84) } }
         }
         .overlay(alignment: .bottom) { FloatingBars() }
@@ -90,11 +90,11 @@ struct NativeRoot: View {
         TabView(selection: $nav.tab) {
             HomeView(openSettings: { nav.tab = 4 })
                 .tabItem { Label("Home", systemImage: "house.fill") }.tag(0)
-            PlaceholderView(title: "Search")
+            SearchView()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(1)
             PlaceholderView(title: "Messages")
                 .tabItem { Label("Messages", systemImage: "bubble.left.and.bubble.right.fill") }.tag(2)
-            PlaceholderView(title: "Notifications")
+            NotificationsView()
                 .tabItem { Label("Alerts", systemImage: "bell.fill") }.tag(3)
             SettingsView()
                 .tabItem { Label("Me", systemImage: "person.crop.circle.fill") }.tag(4)

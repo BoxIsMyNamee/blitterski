@@ -91,6 +91,21 @@ final class BskyRecordView: Decodable {
     }
 }
 
+struct BskySearchResponse: Decodable {
+    let posts: [BskyPost]
+}
+
+struct BskyNotifResponse: Decodable {
+    let notifications: [BskyNotif]
+}
+
+struct BskyNotif: Decodable {
+    let uri: String
+    let author: BskyAuthor
+    let reason: String
+    let indexedAt: String
+}
+
 struct BskyViewer: Decodable {
     let like: String?
     let repost: String?
@@ -164,6 +179,29 @@ actor BlueskyClient {
         var q = [URLQueryItem(name: "feed", value: uri), URLQueryItem(name: "limit", value: "40")]
         if let cursor { q.append(URLQueryItem(name: "cursor", value: cursor)) }
         return try BlueskyClient.decodeFeed(try await get("app.bsky.feed.getFeed", q))
+    }
+
+    func search(query: String) async throws -> [Post] {
+        let data = try await get("app.bsky.feed.searchPosts", [
+            URLQueryItem(name: "q", value: query), URLQueryItem(name: "limit", value: "40"),
+        ])
+        let r = try JSONDecoder().decode(BskySearchResponse.self, from: data)
+        return r.posts.map { BlueskyClient.map($0, repostedBy: nil) }
+    }
+
+    /// Recent notifications, plus the posts behind replies, mentions and quotes so they can be opened.
+    func notifications() async throws -> (items: [BskyNotif], posts: [Post]) {
+        let data = try await get("app.bsky.notification.listNotifications", [URLQueryItem(name: "limit", value: "40")])
+        let items = try JSONDecoder().decode(BskyNotifResponse.self, from: data).notifications
+        let uris = items.filter { ["reply", "mention", "quote"].contains($0.reason) }.map(\.uri)
+        var posts: [Post] = []
+        if !uris.isEmpty {
+            let q = uris.prefix(25).map { URLQueryItem(name: "uris", value: $0) }
+            let d = try await get("app.bsky.feed.getPosts", q)
+            posts = try JSONDecoder().decode(BskySearchResponse.self, from: d).posts
+                .map { BlueskyClient.map($0, repostedBy: nil) }
+        }
+        return (items, posts)
     }
 
     /// Replies under a post, flattened depth-first.
