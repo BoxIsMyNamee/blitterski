@@ -87,7 +87,8 @@ enum XTimelineParser {
         if var q = dig(r, ["quoted_status_result", "result"]) as? [String: Any] {
             if let inner = q["tweet"] as? [String: Any] { q = inner }
             if let qp = post(from: q) {
-                quote = QuotedPost(name: qp.authorName, handle: qp.authorHandle, avatar: qp.avatarURL, text: qp.text)
+                quote = QuotedPost(name: qp.authorName, handle: qp.authorHandle, avatar: qp.avatarURL, text: qp.text,
+                                   id: qp.id, network: .x, date: qp.createdAt, images: qp.images, url: qp.url)
                 quoteID = qp.id
             }
         }

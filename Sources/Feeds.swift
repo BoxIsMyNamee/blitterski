@@ -140,6 +140,7 @@ final class FeedStore: ObservableObject {
         // Show the last session's posts immediately while the network catches up.
         if state(for: feed).posts.isEmpty, let cached = Self.readCache(feed) {
             update(feed) { $0.posts = cached }
+            registerQuotes(cached)
         }
         update(feed) { $0.loading = true; $0.error = nil }
         var attempt = 0
@@ -156,6 +157,7 @@ final class FeedStore: ObservableObject {
                     $0.lastRefresh = Date()
                 }
                 Self.writeCache(feed, posts)
+                registerQuotes(posts)
                 break
             } catch {
                 attempt += 1
@@ -166,6 +168,16 @@ final class FeedStore: ObservableObject {
             }
         }
         update(feed) { $0.loading = false }
+    }
+
+    /// Quoted posts become real, openable posts (kept in their own hidden list so likes and replies work on them).
+    private func registerQuotes(_ posts: [Post]) {
+        var st = states["quoted"] ?? State()
+        var known = Set(st.posts.map(\.id))
+        for p in posts {
+            if let q = p.quote, !q.id.isEmpty, known.insert(q.id).inserted { st.posts.append(q.asPost) }
+        }
+        states["quoted"] = st
     }
 
     /// Pull-to-refresh equivalent for when the app comes back after a while.
@@ -207,6 +219,7 @@ final class FeedStore: ObservableObject {
                 st.bskyCursor = r.cursor
                 if fresh.isEmpty && r.cursor == nil { st.canLoadMore = false }
             }
+            registerQuotes(r.posts)
         } catch {
             // Transient failure (e.g. X timeout): try again later instead of giving up for good.
             update(feed) { $0.retryAfter = Date().addingTimeInterval(8) }

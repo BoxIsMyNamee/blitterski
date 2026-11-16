@@ -77,14 +77,18 @@ final class BskyEmbed: Decodable {
 
 final class BskyRecordView: Decodable {
     let uri: String?
+    let cid: String?
+    let indexedAt: String?
     let author: BskyAuthor?
     let text: String?
     let record: BskyRecordView?
-    enum K: String, CodingKey { case uri, author, value, record }
+    enum K: String, CodingKey { case uri, cid, indexedAt, author, value, record }
     // Tolerant on purpose: quoted records can be posts, lists, feeds or blocked, and must never break a feed decode.
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         uri = try? c.decode(String.self, forKey: .uri)
+        cid = try? c.decode(String.self, forKey: .cid)
+        indexedAt = try? c.decode(String.self, forKey: .indexedAt)
         author = try? c.decode(BskyAuthor.self, forKey: .author)
         text = (try? c.decode(BskyRecord.self, forKey: .value))?.text
         record = try? c.decode(BskyRecordView.self, forKey: .record)
@@ -401,8 +405,12 @@ actor BlueskyClient {
         guard let r = e?.record else { return nil }
         let v = r.author == nil ? r.record : r
         guard let v, let a = v.author, let t = v.text else { return nil }
+        let uri = v.uri ?? ""
+        let rkey = uri.split(separator: "/").last.map(String.init) ?? ""
         return QuotedPost(name: (a.displayName?.isEmpty == false) ? a.displayName! : a.handle,
-                          handle: a.handle, avatar: a.avatar.flatMap(URL.init(string:)), text: t)
+                          handle: a.handle, avatar: a.avatar.flatMap(URL.init(string:)), text: t,
+                          id: uri, network: .bluesky, date: v.indexedAt.map(parseDate) ?? Date(), images: [],
+                          url: URL(string: "https://bsky.app/profile/\(a.handle)/post/\(rkey)"), cid: v.cid)
     }
 
     private static func ratio(_ e: BskyEmbed?) -> CGFloat? {

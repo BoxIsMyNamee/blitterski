@@ -236,6 +236,14 @@ struct QuoteCard: View {
     let quote: QuotedPost
 
     var body: some View {
+        if quote.id.isEmpty { card } else {
+            // Tapping the quoted post opens it as its own post.
+            NavigationLink(value: PostRoute(postID: quote.id, focusReply: false)) { card }
+                .buttonStyle(.plain)
+        }
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 if let a = quote.avatar { Avatar(url: a, size: 18) }

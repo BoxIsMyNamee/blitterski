@@ -38,6 +38,18 @@ struct QuotedPost: Hashable, Codable {
     let handle: String
     let avatar: URL?
     let text: String
+    var id: String = ""
+    var network: Network = .x
+    var date: Date = Date()
+    var images: [URL] = []
+    var url: URL? = nil
+    var cid: String? = nil
+
+    /// A full post so the quoted one can be opened, liked and replied to like any other.
+    var asPost: Post {
+        Post(id: id, network: network, authorHandle: handle, authorName: name, avatarURL: avatar,
+             text: text, createdAt: date, images: images, url: url, cid: cid, rootURI: id, rootCID: cid)
+    }
 }
 
 struct PostVideo: Hashable, Identifiable, Codable {
