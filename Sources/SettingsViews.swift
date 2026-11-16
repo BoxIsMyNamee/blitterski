@@ -166,6 +166,21 @@ struct FeedSettingsView: View {
             }
 
             Section {
+                ForEach(config.combinedCandidates) { f in
+                    Toggle(config.title(f), isOn: Binding(
+                        get: { config.combined.contains(f.id) },
+                        set: { on in
+                            if on { config.combined.insert(f.id) } else { config.combined.remove(f.id) }
+                            Task { await store.refresh(.combined) }
+                        }))
+                }
+            } header: {
+                Text("Combined feed includes")
+            } footer: {
+                Text("Twitter sources and Bluesky sources are mixed evenly. Pull to refresh the Combined tab after changing this.")
+            }
+
+            Section {
                 Button("Load my Bluesky feeds") { Task { await store.fetchSavedFeeds(config) } }
                     .disabled(store.bskyHandle == nil)
             } footer: {

@@ -39,7 +39,26 @@ final class FeedConfig: ObservableObject {
         return n.isEmpty ? f.title : n
     }
 
+    /// Feed ids that make up the Combined feed. Default: Twitter Following + Bluesky Following.
+    @Published var combined: Set<String> {
+        didSet { Self.save(Array(combined), "feeds.combined") }
+    }
+
+    /// Everything that can feed Combined (any single-source feed).
+    var combinedCandidates: [FeedDef] {
+        (FeedDef.builtins + extra).filter { $0.kind != .combined }
+    }
+
+    /// Same data read straight from disk, so the store doesn't need a reference to the config.
+    static func loadCombined() -> [FeedDef] {
+        let ids: [String] = load("feeds.combined") ?? [FeedDef.xFollowing.id, FeedDef.bskyFollowing.id]
+        let extra: [FeedDef] = load("feeds.extra") ?? []
+        return (FeedDef.builtins + extra).filter { $0.kind != .combined && ids.contains($0.id) }
+    }
+
     init() {
+        let saved: [String]? = Self.load("feeds.combined")
+        combined = Set(saved ?? [FeedDef.xFollowing.id, FeedDef.bskyFollowing.id])
         names = Self.load("feeds.names") ?? [:]
         shown = Self.load("feeds.shown") ?? FeedDef.builtins
         extra = Self.load("feeds.extra") ?? []
@@ -230,12 +249,48 @@ final class FeedStore: ObservableObject {
         case .bskyGenerator:
             return try await bsky.feed(uri: feed.generatorURI ?? "", cursor: cursor)
         case .combined:
-            async let xr = fetchOptionalX(.following, more: more)
-            async let br = fetchOptionalBsky(cursor: cursor)
-            let (xp, xerr) = await xr
-            let (bres, berr) = await br
-            if xp.isEmpty && bres.posts.isEmpty, let e = xerr ?? berr { throw e }
-            return (Self.mix(xp, bres.posts.shuffled()), bres.cursor)
+            let sources = FeedConfig.loadCombined()
+            if sources.isEmpty {
+                throw AppError(message: "No sources chosen for Combined. Pick them in Settings > Choose feeds.")
+            }
+            let xOps: [XOp] = sources.compactMap {
+                $0.kind == .xForYou ? .forYou : ($0.kind == .xFollowing ? .following : nil)
+            }
+            let bsrc = sources.filter { $0.kind == .bskyTimeline || $0.kind == .bskyGenerator }
+            var old: [String: String] = [:]
+            if more, let c = cursor, let d = c.data(using: .utf8),
+               let m = try? JSONDecoder().decode([String: String].self, from: d) { old = m }
+
+            var errors: [Error] = []
+            var xlists: [[Post]] = []
+            for op in xOps {
+                let (p, e) = await fetchOptionalX(op, more: more)
+                xlists.append(p)
+                if let e { errors.append(e) }
+            }
+            var blist: [Post] = []
+            var newCursors: [String: String] = [:]
+            if bskyHandle != nil {
+                for f in bsrc {
+                    if more && old[f.id] == nil { continue } // that source is exhausted
+                    let cur = more ? old[f.id] : nil
+                    do {
+                        let r = f.kind == .bskyTimeline
+                            ? try await bsky.timeline(cursor: cur)
+                            : try await bsky.feed(uri: f.generatorURI ?? "", cursor: cur)
+                        blist += r.posts
+                        if let c = r.cursor { newCursors[f.id] = c }
+                    } catch { errors.append(error) }
+                }
+            }
+            // Several Twitter sources take turns; Bluesky is shuffled so refreshes feel fresh.
+            var xs: [Post] = []
+            let longest = xlists.map(\.count).max() ?? 0
+            for i in 0..<longest { for l in xlists where i < l.count { xs.append(l[i]) } }
+            let merged = Self.mix(Self.unique(xs), Self.unique(blist).shuffled())
+            if merged.isEmpty, let e = errors.first { throw e }
+            let enc = (try? JSONEncoder().encode(newCursors)).flatMap { String(data: $0, encoding: .utf8) }
+            return (merged, newCursors.isEmpty ? nil : enc)
         }
     }
 
