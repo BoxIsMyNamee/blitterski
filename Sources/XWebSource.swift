@@ -99,7 +99,16 @@ final class XWebSource: NSObject, WKScriptMessageHandler {
                 webView.evaluateJavaScript("window.scrollTo(0, document.body.scrollHeight);", completionHandler: nil)
             }
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 25_000_000_000)
+                // X's infinite scroll sometimes ignores a single scroll; nudge it again while we wait.
+                for i in 0..<7 {
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    guard self.pendingToken == token, self.pending != nil else { return }
+                    if !reload && i < 5 {
+                        self.webView.evaluateJavaScript(
+                            "window.scrollBy(0, -400); setTimeout(()=>window.scrollTo(0, document.body.scrollHeight), 200);",
+                            completionHandler: nil)
+                    }
+                }
                 if self.pendingToken == token, let p = self.pending {
                     self.pending = nil
                     p.resume(throwing: XError.timeout)

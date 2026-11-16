@@ -70,6 +70,8 @@ final class FeedStore: ObservableObject {
         var bskyCursor: String?
         var canLoadMore = true
         var loadedOnce = false
+        var retryAfter = Date.distantPast
+        var lastRefresh = Date.distantPast
     }
 
     @Published private(set) var states: [String: State] = [:]
@@ -101,24 +103,66 @@ final class FeedStore: ObservableObject {
 
     func refresh(_ feed: FeedDef) async {
         guard !state(for: feed).loading else { return }
+        // Show the last session's posts immediately while the network catches up.
+        if state(for: feed).posts.isEmpty, let cached = Self.readCache(feed) {
+            update(feed) { $0.posts = cached }
+        }
         update(feed) { $0.loading = true; $0.error = nil }
-        do {
-            let r = try await fetchPage(feed, more: false, cursor: nil)
-            update(feed) {
-                $0.posts = Self.order(Self.unique(r.posts), feed)
-                $0.bskyCursor = r.cursor
-                $0.canLoadMore = true
-                $0.loadedOnce = true
+        var attempt = 0
+        while true {
+            do {
+                let r = try await fetchPage(feed, more: false, cursor: nil)
+                let posts = Self.order(Self.unique(r.posts), feed)
+                update(feed) {
+                    $0.posts = posts
+                    $0.bskyCursor = r.cursor
+                    $0.canLoadMore = true
+                    $0.retryAfter = .distantPast
+                    $0.loadedOnce = true
+                    $0.lastRefresh = Date()
+                }
+                Self.writeCache(feed, posts)
+                break
+            } catch {
+                attempt += 1
+                // X occasionally needs a second go (page was still loading, response missed).
+                if attempt < 2, case XError.timeout = error { continue }
+                update(feed) { $0.error = error.localizedDescription; $0.loadedOnce = true }
+                break
             }
-        } catch {
-            update(feed) { $0.error = error.localizedDescription; $0.loadedOnce = true }
         }
         update(feed) { $0.loading = false }
     }
 
+    /// Pull-to-refresh equivalent for when the app comes back after a while.
+    func refreshIfStale(_ feed: FeedDef, after seconds: TimeInterval = 600) async {
+        let s = state(for: feed)
+        guard s.loadedOnce, Date().timeIntervalSince(s.lastRefresh) > seconds else { return }
+        await refresh(feed)
+    }
+
+    // MARK: Disk cache (last refresh per feed)
+
+    private static func cacheURL(_ feed: FeedDef) -> URL? {
+        guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        let safe = feed.id.map { $0.isLetter || $0.isNumber ? String($0) : "_" }.joined()
+        return dir.appendingPathComponent("feed-\(safe).json")
+    }
+
+    private static func readCache(_ feed: FeedDef) -> [Post]? {
+        guard let u = cacheURL(feed), let d = try? Data(contentsOf: u),
+              let posts = try? JSONDecoder().decode([Post].self, from: d), !posts.isEmpty else { return nil }
+        return posts
+    }
+
+    private static func writeCache(_ feed: FeedDef, _ posts: [Post]) {
+        guard let u = cacheURL(feed), let d = try? JSONEncoder().encode(Array(posts.prefix(60))) else { return }
+        try? d.write(to: u, options: .atomic)
+    }
+
     func loadMore(_ feed: FeedDef) async {
         let s = state(for: feed)
-        guard !s.loading, s.canLoadMore, s.loadedOnce, !s.posts.isEmpty else { return }
+        guard !s.loading, s.canLoadMore, s.loadedOnce, !s.posts.isEmpty, Date() > s.retryAfter else { return }
         update(feed) { $0.loading = true }
         do {
             let r = try await fetchPage(feed, more: true, cursor: s.bskyCursor)
@@ -130,7 +174,8 @@ final class FeedStore: ObservableObject {
                 if fresh.isEmpty && r.cursor == nil { st.canLoadMore = false }
             }
         } catch {
-            update(feed) { $0.canLoadMore = false }
+            // Transient failure (e.g. X timeout): try again later instead of giving up for good.
+            update(feed) { $0.retryAfter = Date().addingTimeInterval(8) }
         }
         update(feed) { $0.loading = false }
     }

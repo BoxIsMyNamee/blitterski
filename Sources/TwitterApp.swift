@@ -24,10 +24,16 @@ struct TwitterApp: App {
 struct RootView: View {
     @EnvironmentObject var store: FeedStore
     @StateObject private var nav = Nav()
+    @EnvironmentObject var config: FeedConfig
+    @Environment(\.scenePhase) private var phase
 
     var body: some View {
         content
             .environmentObject(nav)
+            .onChange(of: phase) { p in
+                guard p == .active, let f = config.shown.first(where: { $0.id == nav.feed }) else { return }
+                Task { await store.refreshIfStale(f) }
+            }
             .sheet(isPresented: $nav.showCompose) { ComposeView() }
             .overlay(alignment: .top) {
                 if let t = store.toast {
@@ -225,7 +231,12 @@ struct FeedPage: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 if let e = state.error {
-                    Text(e).font(.footnote).foregroundStyle(.red).padding()
+                    VStack(spacing: 8) {
+                        Text(e).font(.footnote).foregroundStyle(.red)
+                        Button("Try again") { Task { await store.refresh(feed) } }
+                            .buttonStyle(.bordered)
+                    }
+                    .padding()
                 }
                 if state.posts.isEmpty && state.loading {
                     ProgressView().frame(maxWidth: .infinity).padding()

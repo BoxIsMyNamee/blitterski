@@ -3,7 +3,7 @@ import Foundation
 enum Network: String, Codable { case x, bluesky }
 
 /// Network-agnostic post. Both X and Bluesky map into this so merged feeds are trivial.
-struct Post: Identifiable, Hashable {
+struct Post: Identifiable, Hashable, Codable {
     let id: String
     let network: Network
     let authorHandle: String
@@ -33,14 +33,14 @@ struct Post: Identifiable, Hashable {
     var rootCID: String? = nil
 }
 
-struct QuotedPost: Hashable {
+struct QuotedPost: Hashable, Codable {
     let name: String
     let handle: String
     let avatar: URL?
     let text: String
 }
 
-struct PostVideo: Hashable, Identifiable {
+struct PostVideo: Hashable, Identifiable, Codable {
     let url: URL
     let poster: URL?
     var gif = false
