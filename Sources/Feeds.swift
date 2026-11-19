@@ -233,15 +233,22 @@ final class FeedStore: ObservableObject {
         return posts.filter { seen.insert($0.id).inserted }
     }
 
-    /// Alternates Twitter and Bluesky posts 1:1. If one side has far more, the surplus is trimmed
-    /// so the feed stays an even mix instead of tailing off into one network.
+    /// Interleaves Twitter and Bluesky posts evenly across the batch without throwing away fetched posts
+    /// when one side returns a smaller page.
     private static func mix(_ x: [Post], _ b: [Post]) -> [Post] {
         if x.isEmpty || b.isEmpty { return x + b }
-        let n = min(x.count, b.count)
         var out: [Post] = []
-        for i in 0..<n { out.append(x[i]); out.append(b[i]) }
-        out += x.dropFirst(n).prefix(2)
-        out += b.dropFirst(n).prefix(2)
+        out.reserveCapacity(x.count + b.count)
+        var ix = 0, ib = 0
+        while ix < x.count || ib < b.count {
+            if ix < x.count && (ib >= b.count || Double(ix) / Double(x.count) <= Double(ib) / Double(b.count)) {
+                out.append(x[ix])
+                ix += 1
+            } else if ib < b.count {
+                out.append(b[ib])
+                ib += 1
+            }
+        }
         return out
     }
 
@@ -326,8 +333,10 @@ final class FeedStore: ObservableObject {
         guard !query.isEmpty else { return }
         searching = true; searchError = nil
         do {
-            var st = State(); st.posts = try await bsky.search(query: query); st.loadedOnce = true
+            let results = Self.unique(try await bsky.search(query: query))
+            var st = State(); st.posts = results; st.loadedOnce = true
             states["search"] = st
+            registerQuotes(results)
         } catch {
             searchError = bskyHandle == nil ? "Sign in to Bluesky in Settings to search." : error.localizedDescription
         }
@@ -339,15 +348,29 @@ final class FeedStore: ObservableObject {
         notifLoading = true; notifError = nil
         do {
             let r = try await bsky.notifications()
-            var st = State(); st.posts = r.posts; st.loadedOnce = true
+            let posts = Self.unique(r.posts)
+            var st = State(); st.posts = posts; st.loadedOnce = true
             states["notif"] = st
+            registerQuotes(posts)
             let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            notifs = r.items.map { n in
-                NotifItem(id: n.uri + n.reason, reason: n.reason,
-                          name: (n.author.displayName?.isEmpty == false) ? n.author.displayName! : n.author.handle,
-                          handle: n.author.handle, avatar: n.author.avatar.flatMap(URL.init(string:)),
-                          date: f.date(from: n.indexedAt) ?? ISO8601DateFormatter().date(from: n.indexedAt) ?? Date(),
-                          postID: ["reply", "mention", "quote"].contains(n.reason) ? n.uri : nil)
+            var seenNotif = Set<String>()
+            notifs = r.items.compactMap { n in
+                let id = n.uri + ":" + n.reason + ":" + n.indexedAt
+                guard seenNotif.insert(id).inserted else { return nil }
+                let targetPostID: String?
+                if ["reply", "mention", "quote"].contains(n.reason) {
+                    targetPostID = n.uri
+                } else if ["like", "repost"].contains(n.reason) {
+                    targetPostID = n.reasonSubject
+                } else {
+                    targetPostID = nil
+                }
+                return NotifItem(
+                    id: id, reason: n.reason,
+                    name: (n.author.displayName?.isEmpty == false) ? n.author.displayName! : n.author.handle,
+                    handle: n.author.handle, avatar: n.author.avatar.flatMap(URL.init(string:)),
+                    date: f.date(from: n.indexedAt) ?? ISO8601DateFormatter().date(from: n.indexedAt) ?? Date(),
+                    postID: targetPostID)
             }
         } catch {
             notifError = error.localizedDescription
@@ -365,6 +388,7 @@ final class FeedStore: ObservableObject {
         return nil
     }
 
+    func parents(for post: Post) -> [Post] { states["parents:\(post.id)"]?.posts ?? [] }
     func replies(for post: Post) -> State { states["thread:\(post.id)"] ?? State() }
 
     /// Apply a change to every copy of a post (it can sit in several feeds at once).
@@ -379,19 +403,31 @@ final class FeedStore: ObservableObject {
 
     func loadThread(_ post: Post) async {
         let key = "thread:\(post.id)"
+        let pKey = "parents:\(post.id)"
         var s = states[key] ?? State()
         s.loading = true
         states[key] = s
         do {
+            let parents: [Post]
             let replies: [Post]
             if post.network == .bluesky {
-                replies = try await bsky.thread(uri: post.id)
+                let res = try await bsky.threadWithParents(uri: post.id)
+                parents = Self.unique(res.parents)
+                replies = Self.unique(res.replies)
             } else {
                 guard let url = post.url else { throw XError.badResponse }
-                replies = try await xActions.replies(statusURL: url)
+                let res = try await xActions.thread(statusURL: url)
+                parents = Self.unique(res.parents)
+                replies = Self.unique(res.replies)
             }
+            var ps = State()
+            ps.posts = parents
+            ps.loadedOnce = true
+            states[pKey] = ps
+
             s.posts = replies
             s.error = nil
+            registerQuotes(parents + replies)
         } catch {
             s.error = error.localizedDescription
         }

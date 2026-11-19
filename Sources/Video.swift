@@ -16,8 +16,8 @@ final class VideoPrefs: ObservableObject {
 
     private func applySession() {
         let s = AVAudioSession.sharedInstance()
-        try? s.setCategory(muted ? .ambient : .playback)
-        try? s.setActive(true)
+        try? s.setCategory(muted ? .ambient : .playback, options: muted ? [.mixWithOthers] : [])
+        if !muted { try? s.setActive(true) }
     }
 }
 
@@ -171,11 +171,21 @@ struct VideoViewer: View {
                 .contextMenu {
                     Button { Task { await save() } } label: { Label("Save to Photos", systemImage: "square.and.arrow.down") }
                 }
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.headline).foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(Color.black.opacity(0.5), in: Circle())
+            HStack(spacing: 10) {
+                if video.savable {
+                    Button { Task { await save() } } label: {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.headline).foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .background(Color.black.opacity(0.5), in: Circle())
+                    }
+                }
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.headline).foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(Color.black.opacity(0.5), in: Circle())
+                }
             }
             .padding(16)
             .opacity(dragY == 0 ? 1 : 0)

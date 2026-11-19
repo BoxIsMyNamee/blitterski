@@ -85,6 +85,7 @@ final class XWebSource: NSObject, WKScriptMessageHandler {
         await lock.acquire()
         defer { lock.release() }
         attach()
+        await XSession.ensureCookies()
         wanted = op
         let reload = !loadMore || currentOp != op
 
@@ -103,7 +104,18 @@ final class XWebSource: NSObject, WKScriptMessageHandler {
                 for i in 0..<7 {
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
                     guard self.pendingToken == token, self.pending != nil else { return }
-                    if !reload && i < 5 {
+                    let path = self.webView.url?.path.lowercased() ?? ""
+                    if path.contains("/login") || path.contains("/i/flow/login") {
+                        if let p = self.pending {
+                            self.pending = nil
+                            p.resume(throwing: XError.notLoggedIn)
+                        }
+                        return
+                    }
+                    if reload && !self.triedTab {
+                        self.triedTab = true
+                        self.clickTab(self.wanted)
+                    } else if !reload && i < 5 {
                         self.webView.evaluateJavaScript(
                             "window.scrollBy(0, -400); setTimeout(()=>window.scrollTo(0, document.body.scrollHeight), 200);",
                             completionHandler: nil)
@@ -145,8 +157,11 @@ final class XWebSource: NSObject, WKScriptMessageHandler {
     private func clickTab(_ op: XOp) {
         let js = """
         (function(label){
-          const find = () => Array.from(document.querySelectorAll('[role="tab"]'))
-            .find(t => (t.innerText || '').trim().toLowerCase() === label);
+          const find = () => {
+            const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+            return tabs.find(t => (t.innerText || '').trim().toLowerCase() === label)
+                || tabs.find(t => (t.innerText || '').toLowerCase().includes(label));
+          };
           let n = 0;
           const iv = setInterval(() => {
             const t = find();

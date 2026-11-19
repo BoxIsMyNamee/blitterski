@@ -128,11 +128,19 @@ struct PostActions: View {
             .column()
 
             Menu {
-                Button { UIPasteboard.general.string = post.text } label: {
-                    Label("Copy text", systemImage: "doc.on.doc")
+                if !post.text.isEmpty {
+                    Button {
+                        UIPasteboard.general.string = post.text
+                        store.toast = "Copied text"
+                    } label: {
+                        Label("Copy text", systemImage: "doc.on.doc")
+                    }
                 }
                 if let url = post.url {
-                    Button { UIPasteboard.general.url = url } label: {
+                    Button {
+                        UIPasteboard.general.url = url
+                        store.toast = "Copied link"
+                    } label: {
                         Label("Copy link", systemImage: "link")
                     }
                     Link(destination: url) { Label("Open original", systemImage: "safari") }
@@ -244,15 +252,27 @@ struct QuoteCard: View {
     }
 
     private var card: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 if let a = quote.avatar { Avatar(url: a, size: 18) }
-                Text(quote.name).fontWeight(.semibold).lineLimit(1)
+                Text(quote.name).fontWeight(.semibold).lineLimit(1).layoutPriority(1)
                 Text("@\(quote.handle)").foregroundStyle(.secondary).lineLimit(1)
+                Text("· \(shortAge(quote.date))").foregroundStyle(.secondary).lineLimit(1).fixedSize()
             }
             .font(.footnote)
             if !quote.text.isEmpty {
-                Text(quote.text).font(.subheadline).lineLimit(6)
+                Text(quote.text).font(.subheadline).lineLimit(6).multilineTextAlignment(.leading)
+            }
+            if !quote.images.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(Array(quote.images.prefix(4)), id: \.self) { u in
+                        Color.clear
+                            .frame(height: 110)
+                            .overlay(CachedImage(url: u, fill: true))
+                            .clipped()
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
         .padding(10)

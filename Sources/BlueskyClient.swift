@@ -51,9 +51,24 @@ struct BskyReplyRef: Decodable {
     let parent: BskyRef
 }
 
+struct BskyByteSlice: Decodable {
+    let byteStart: Int
+    let byteEnd: Int
+}
+
+struct BskyFacetFeature: Decodable {
+    let uri: String?
+}
+
+struct BskyFacet: Decodable {
+    let index: BskyByteSlice?
+    let features: [BskyFacetFeature]?
+}
+
 struct BskyRecord: Decodable {
     let text: String?
     let reply: BskyReplyRef?
+    let facets: [BskyFacet]?
 }
 
 struct BskyImage: Decodable {
@@ -81,8 +96,9 @@ final class BskyRecordView: Decodable {
     let indexedAt: String?
     let author: BskyAuthor?
     let text: String?
+    let embeds: [BskyEmbed]?
     let record: BskyRecordView?
-    enum K: String, CodingKey { case uri, cid, indexedAt, author, value, record }
+    enum K: String, CodingKey { case uri, cid, indexedAt, author, value, embeds, record }
     // Tolerant on purpose: quoted records can be posts, lists, feeds or blocked, and must never break a feed decode.
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
@@ -90,7 +106,12 @@ final class BskyRecordView: Decodable {
         cid = try? c.decode(String.self, forKey: .cid)
         indexedAt = try? c.decode(String.self, forKey: .indexedAt)
         author = try? c.decode(BskyAuthor.self, forKey: .author)
-        text = (try? c.decode(BskyRecord.self, forKey: .value))?.text
+        if let rec = try? c.decode(BskyRecord.self, forKey: .value) {
+            text = BlueskyClient.expandFacets(rec.text ?? "", facets: rec.facets)
+        } else {
+            text = nil
+        }
+        embeds = try? c.decode([BskyEmbed].self, forKey: .embeds)
         record = try? c.decode(BskyRecordView.self, forKey: .record)
     }
 }
@@ -107,6 +128,7 @@ struct BskyNotif: Decodable {
     let uri: String
     let author: BskyAuthor
     let reason: String
+    let reasonSubject: String?
     let indexedAt: String
 }
 
@@ -134,6 +156,7 @@ struct BskyThreadResponse: Decodable {
 
 final class BskyThreadNode: Decodable {
     let post: BskyPost?
+    let parent: BskyThreadNode?
     let replies: [BskyThreadNode]?
 }
 
@@ -193,39 +216,73 @@ actor BlueskyClient {
         return r.posts.map { BlueskyClient.map($0, repostedBy: nil) }
     }
 
-    /// Recent notifications, plus the posts behind replies, mentions and quotes so they can be opened.
+    /// Recent notifications, plus the posts behind replies, mentions, quotes, likes and reposts so they can be opened.
     func notifications() async throws -> (items: [BskyNotif], posts: [Post]) {
         let data = try await get("app.bsky.notification.listNotifications", [URLQueryItem(name: "limit", value: "40")])
         let items = try JSONDecoder().decode(BskyNotifResponse.self, from: data).notifications
-        let uris = items.filter { ["reply", "mention", "quote"].contains($0.reason) }.map(\.uri)
+        var seen = Set<String>()
+        var uris: [String] = []
+        for n in items {
+            let target: String?
+            if ["reply", "mention", "quote"].contains(n.reason) {
+                target = n.uri
+            } else if ["like", "repost"].contains(n.reason) {
+                target = n.reasonSubject
+            } else {
+                target = nil
+            }
+            if let u = target, u.contains("/app.bsky.feed.post/"), seen.insert(u).inserted {
+                uris.append(u)
+            }
+        }
         var posts: [Post] = []
-        if !uris.isEmpty {
-            let q = uris.prefix(25).map { URLQueryItem(name: "uris", value: $0) }
-            let d = try await get("app.bsky.feed.getPosts", q)
-            posts = try JSONDecoder().decode(BskySearchResponse.self, from: d).posts
-                .map { BlueskyClient.map($0, repostedBy: nil) }
+        var offset = 0
+        while offset < uris.count {
+            let chunk = Array(uris[offset..<min(offset + 25, uris.count)])
+            offset += 25
+            let q = chunk.map { URLQueryItem(name: "uris", value: $0) }
+            if let d = try? await get("app.bsky.feed.getPosts", q),
+               let r = try? JSONDecoder().decode(BskySearchResponse.self, from: d) {
+                posts += r.posts.map { BlueskyClient.map($0, repostedBy: nil) }
+            }
         }
         return (items, posts)
     }
 
-    /// Replies under a post, flattened depth-first.
-    func thread(uri: String) async throws -> [Post] {
+    /// Parents above a post (oldest first) and replies under it (flattened depth-first).
+    func threadWithParents(uri: String) async throws -> (parents: [Post], replies: [Post]) {
         let data = try await get("app.bsky.feed.getPostThread", [
             URLQueryItem(name: "uri", value: uri),
             URLQueryItem(name: "depth", value: "3"),
-            URLQueryItem(name: "parentHeight", value: "0"),
+            URLQueryItem(name: "parentHeight", value: "10"),
         ])
         let r = try JSONDecoder().decode(BskyThreadResponse.self, from: data)
-        var out: [Post] = []
+        var parents: [Post] = []
+        var cur = r.thread.parent
+        var seenParents = Set<String>()
+        while let node = cur {
+            if let p = node.post, seenParents.insert(p.uri).inserted {
+                parents.append(BlueskyClient.map(p, repostedBy: nil))
+            }
+            cur = node.parent
+        }
+        parents.reverse()
+
+        var replies: [Post] = []
         func walk(_ nodes: [BskyThreadNode]?) {
             for n in nodes ?? [] {
                 guard let p = n.post else { continue }
-                out.append(BlueskyClient.map(p, repostedBy: nil))
+                replies.append(BlueskyClient.map(p, repostedBy: nil))
                 walk(n.replies)
             }
         }
         walk(r.thread.replies)
-        return out
+        return (parents, replies)
+    }
+
+    /// Replies under a post, flattened depth-first.
+    func thread(uri: String) async throws -> [Post] {
+        try await threadWithParents(uri: uri).replies
     }
 
     /// The user's saved/pinned custom feeds, so they can be added as tabs.
@@ -277,15 +334,18 @@ actor BlueskyClient {
     }
 
     func createPost(text: String) async throws {
-        _ = try await createRecord("app.bsky.feed.post", [
+        var rec: [String: Any] = [
             "$type": "app.bsky.feed.post",
             "text": text,
             "createdAt": Self.now(),
-        ])
+        ]
+        let facets = Self.detectLinkFacets(in: text)
+        if !facets.isEmpty { rec["facets"] = facets }
+        _ = try await createRecord("app.bsky.feed.post", rec)
     }
 
     func reply(text: String, parent: (uri: String, cid: String), root: (uri: String, cid: String)) async throws {
-        _ = try await createRecord("app.bsky.feed.post", [
+        var rec: [String: Any] = [
             "$type": "app.bsky.feed.post",
             "text": text,
             "createdAt": Self.now(),
@@ -293,7 +353,10 @@ actor BlueskyClient {
                 "root": ["uri": root.uri, "cid": root.cid],
                 "parent": ["uri": parent.uri, "cid": parent.cid],
             ],
-        ])
+        ]
+        let facets = Self.detectLinkFacets(in: text)
+        if !facets.isEmpty { rec["facets"] = facets }
+        _ = try await createRecord("app.bsky.feed.post", rec)
     }
 
     private func createRecord(_ collection: String, _ record: [String: Any]) async throws -> String {
@@ -384,10 +447,11 @@ actor BlueskyClient {
     static func map(_ p: BskyPost, repostedBy: String?) -> Post {
         let rkey = p.uri.split(separator: "/").last.map(String.init) ?? ""
         let name = (p.author.displayName?.isEmpty == false) ? p.author.displayName! : p.author.handle
+        let fullText = expandFacets(p.record.text ?? "", facets: p.record.facets)
         return Post(id: p.uri, network: .bluesky,
                     authorHandle: p.author.handle, authorName: name,
                     avatarURL: p.author.avatar.flatMap(URL.init(string:)),
-                    text: p.record.text ?? "", createdAt: parseDate(p.indexedAt),
+                    text: fullText, createdAt: parseDate(p.indexedAt),
                     replyCount: p.replyCount ?? 0, repostCount: p.repostCount ?? 0, likeCount: p.likeCount ?? 0,
                     images: imageURLs(p.embed), videos: videoList(p.embed), quote: quote(p.embed), imageRatio: ratio(p.embed),
                     repostedBy: repostedBy,
@@ -401,15 +465,51 @@ actor BlueskyClient {
                     rootCID: p.record.reply?.root.cid ?? p.cid)
     }
 
+    /// Replaces truncated link spans in Bluesky post text with their full facet URIs so links work when tapped.
+    static func expandFacets(_ text: String, facets: [BskyFacet]?) -> String {
+        guard let facets, !facets.isEmpty, !text.isEmpty else { return text }
+        var utf8 = Array(text.utf8)
+        let sorted = facets.sorted { ($0.index?.byteStart ?? 0) > ($1.index?.byteStart ?? 0) }
+        for f in sorted {
+            guard let idx = f.index,
+                  let uri = f.features?.compactMap(\.uri).first,
+                  !uri.isEmpty,
+                  idx.byteStart >= 0, idx.byteEnd <= utf8.count, idx.byteStart < idx.byteEnd else { continue }
+            utf8.replaceSubrange(idx.byteStart..<idx.byteEnd, with: uri.utf8)
+        }
+        return String(decoding: utf8, as: UTF8.self)
+    }
+
+    /// Detects URLs in outgoing post text and encodes AT Protocol link facets with UTF-8 byte offsets.
+    private static func detectLinkFacets(in text: String) -> [[String: Any]] {
+        guard let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return [] }
+        let matches = det.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+        var out: [[String: Any]] = []
+        for m in matches {
+            guard let url = m.url,
+                  let scheme = url.scheme?.lowercased(),
+                  (scheme == "http" || scheme == "https"),
+                  let range = Range(m.range, in: text) else { continue }
+            let start = text[..<range.lowerBound].utf8.count
+            let end = start + text[range].utf8.count
+            out.append([
+                "index": ["byteStart": start, "byteEnd": end],
+                "features": [["$type": "app.bsky.richtext.facet#link", "uri": url.absoluteString]],
+            ])
+        }
+        return out
+    }
+
     private static func quote(_ e: BskyEmbed?) -> QuotedPost? {
         guard let r = e?.record else { return nil }
         let v = r.author == nil ? r.record : r
         guard let v, let a = v.author, let t = v.text else { return nil }
         let uri = v.uri ?? ""
         let rkey = uri.split(separator: "/").last.map(String.init) ?? ""
+        let imgs = (v.embeds ?? []).flatMap { imageURLs($0) }
         return QuotedPost(name: (a.displayName?.isEmpty == false) ? a.displayName! : a.handle,
                           handle: a.handle, avatar: a.avatar.flatMap(URL.init(string:)), text: t,
-                          id: uri, network: .bluesky, date: v.indexedAt.map(parseDate) ?? Date(), images: [],
+                          id: uri, network: .bluesky, date: v.indexedAt.map(parseDate) ?? Date(), images: imgs,
                           url: URL(string: "https://bsky.app/profile/\(a.handle)/post/\(rkey)"), cid: v.cid)
     }
 

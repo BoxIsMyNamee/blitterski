@@ -68,25 +68,32 @@ final class XActionRunner: NSObject, WKNavigationDelegate, WKScriptMessageHandle
     })();
     """
 
-    /// Loads the tweet's page and returns the replies X's own JS fetched for it.
-    func replies(statusURL: URL) async throws -> [Post] {
+    /// Loads the tweet's page and returns the parents and replies X's own JS fetched for it.
+    func thread(statusURL: URL) async throws -> (parents: [Post], replies: [Post]) {
         await lock.acquire()
         defer { lock.release() }
         attach()
+        await XSession.ensureCookies()
         detailBodies = []
         let id = statusURL.lastPathComponent
         await load(statusURL)
         let start = Date()
-        var best: [Post] = []
+        var bestParents: [Post] = []
+        var bestReplies: [Post] = []
         while Date().timeIntervalSince(start) < 15 {
             for b in detailBodies {
-                let found = XTimelineParser.parseDetail(Data(b.utf8), excluding: id)
-                if found.count > best.count { best = found }
+                let found = XTimelineParser.parseThread(Data(b.utf8), focalID: id)
+                if found.parents.count > bestParents.count { bestParents = found.parents }
+                if found.replies.count > bestReplies.count { bestReplies = found.replies }
             }
-            if !best.isEmpty && Date().timeIntervalSince(start) > 2.5 { break }
+            if (!bestReplies.isEmpty || !bestParents.isEmpty) && Date().timeIntervalSince(start) > 2.5 { break }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
-        return best
+        return (bestParents, bestReplies)
+    }
+
+    func replies(statusURL: URL) async throws -> [Post] {
+        try await thread(statusURL: statusURL).replies
     }
 
     private func attach() {
@@ -100,6 +107,7 @@ final class XActionRunner: NSObject, WKNavigationDelegate, WKScriptMessageHandle
         await lock.acquire()
         defer { lock.release() }
         attach()
+        await XSession.ensureCookies()
 
         let op: String
         var text = ""

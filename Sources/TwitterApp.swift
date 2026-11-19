@@ -99,7 +99,7 @@ struct NativeRoot: View {
             SettingsView()
                 .tabItem { Label("Me", systemImage: "person.crop.circle.fill") }.tag(4)
         }
-        .tabViewBottomAccessory(isEnabled: nav.tab == 0) { FeedAccessory() }
+        .tabViewBottomAccessory(isEnabled: nav.tab == 0 && !nav.hideBars) { FeedAccessory() }
     }
 }
 
@@ -117,7 +117,11 @@ struct FeedAccessory: View {
                         ForEach(config.shown) { f in
                             let on = nav.feed == f.id
                             Button {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { nav.feed = f.id }
+                                if on {
+                                    nav.triggerScrollToTop()
+                                } else {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { nav.feed = f.id }
+                                }
                             } label: {
                                 Text(config.title(f))
                                     .font(.subheadline.weight(on ? .semibold : .regular))
@@ -162,6 +166,17 @@ struct PostRoute: Hashable {
     let focusReply: Bool
 }
 
+private struct OpenPostKey: EnvironmentKey {
+    static let defaultValue: (PostRoute) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+    var openPost: (PostRoute) -> Void {
+        get { self[OpenPostKey.self] }
+        set { self[OpenPostKey.self] = newValue }
+    }
+}
+
 struct HomeView: View {
     @EnvironmentObject var config: FeedConfig
     @EnvironmentObject var theme: Theme
@@ -193,9 +208,14 @@ struct HomeView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: PostRoute.self) { PostDetailView(route: $0).toolbar(.hidden, for: .tabBar) }
         }
+        .environment(\.openPost, { path.append($0) })
         .onAppear(perform: ensureSelection)
         .onChange(of: config.shown) { _ in ensureSelection() }
-        .onChange(of: path) { p in nav.hideBars = !p.isEmpty }
+        .onChange(of: path) { p in if nav.tab == 0 { nav.hideBars = !p.isEmpty } }
+        .onChange(of: nav.tab) { t in if t == 0 { nav.hideBars = !path.isEmpty } }
+        .onChange(of: nav.scrollToTop) { _ in
+            if nav.tab == 0 && !path.isEmpty { path.removeAll() }
+        }
     }
 
     private func ensureSelection() {
@@ -210,8 +230,11 @@ struct HomeView: View {
                 Image(systemName: "line.3.horizontal").font(.title3).foregroundStyle(.primary)
             }
             Spacer()
-            Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.title2).foregroundStyle(theme.accent)
+            Button { nav.triggerScrollToTop() } label: {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.title2).foregroundStyle(theme.accent)
+            }
+            .buttonStyle(.plain)
             Spacer()
             Color.clear.frame(width: 24, height: 24)
         }
@@ -229,30 +252,38 @@ struct FeedPage: View {
 
     var body: some View {
         let state = store.state(for: feed)
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if let e = state.error {
-                    VStack(spacing: 8) {
-                        Text(e).font(.footnote).foregroundStyle(.red)
-                        Button("Try again") { Task { await store.refresh(feed) } }
-                            .buttonStyle(.bordered)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    Color.clear.frame(height: 0).id("feed-top")
+                    if let e = state.error {
+                        VStack(spacing: 8) {
+                            Text(e).font(.footnote).foregroundStyle(.red)
+                            Button("Try again") { Task { await store.refresh(feed) } }
+                                .buttonStyle(.bordered)
+                        }
+                        .padding()
                     }
-                    .padding()
+                    if state.posts.isEmpty && state.loading {
+                        ProgressView().frame(maxWidth: .infinity).padding()
+                    }
+                    if state.posts.isEmpty && !state.loading && state.error == nil && state.loadedOnce {
+                        Text("Nothing here yet. Connect your accounts in Settings (profile tab).")
+                            .font(.footnote).foregroundStyle(.secondary).padding()
+                    }
+                    ForEach(state.posts) { p in
+                        row(p, lastID: state.posts.last?.id)
+                    }
+                    if state.loading && !state.posts.isEmpty {
+                        ProgressView().frame(maxWidth: .infinity).padding()
+                    }
+                    Color.clear.frame(height: nav.bottomInset) // room under the custom floating bars
                 }
-                if state.posts.isEmpty && state.loading {
-                    ProgressView().frame(maxWidth: .infinity).padding()
+            }
+            .onChange(of: nav.scrollToTop) { _ in
+                if isActive && nav.tab == 0 {
+                    withAnimation { proxy.scrollTo("feed-top", anchor: .top) }
                 }
-                if state.posts.isEmpty && !state.loading && state.error == nil && state.loadedOnce {
-                    Text("Nothing here yet. Connect your accounts in Settings (profile tab).")
-                        .font(.footnote).foregroundStyle(.secondary).padding()
-                }
-                ForEach(state.posts) { p in
-                    row(p, lastID: state.posts.last?.id)
-                }
-                if state.loading && !state.posts.isEmpty {
-                    ProgressView().frame(maxWidth: .infinity).padding()
-                }
-                Color.clear.frame(height: nav.bottomInset) // room under the custom floating bars
             }
         }
         .refreshable { await store.refresh(feed) }

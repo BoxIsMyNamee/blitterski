@@ -31,6 +31,10 @@ final class Nav: ObservableObject {
     @Published var hideBars = false
     /// Extra scroll room needed under the custom floating bars (0 when the system tab bar is used).
     @Published var bottomInset: CGFloat = 150
+    /// Incremented when the active tab or active feed pill is re-tapped to scroll to top / pop to root.
+    @Published var scrollToTop = 0
+
+    func triggerScrollToTop() { scrollToTop &+= 1 }
 }
 
 struct FloatingBars: View {
@@ -64,7 +68,11 @@ struct FloatingBars: View {
                         ForEach(config.shown) { f in
                             let on = nav.feed == f.id
                             Button {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { nav.feed = f.id }
+                                if on {
+                                    nav.triggerScrollToTop()
+                                } else {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { nav.feed = f.id }
+                                }
                             } label: {
                                 Text(config.title(f))
                                     .font(.subheadline.weight(on ? .semibold : .regular))
@@ -100,7 +108,11 @@ struct FloatingBars: View {
             ForEach(Array(tabs.enumerated()), id: \.offset) { i, t in
                 let on = nav.tab == i
                 Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { nav.tab = i }
+                    if on {
+                        nav.triggerScrollToTop()
+                    } else {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { nav.tab = i }
+                    }
                 } label: {
                     VStack(spacing: 2) {
                         Image(systemName: t.0).font(.system(size: 19))
@@ -142,6 +154,7 @@ struct SwipeRow<Content: View>: View {
             .offset(x: dx)
             .background(alignment: dx >= 0 ? .leading : .trailing) { reveal }
             .background(SwipeCatcher(onChange: change, onEnd: end))
+            .onDisappear { dx = 0; armed = false }
     }
 
     private func change(_ t: CGFloat) {
@@ -189,7 +202,10 @@ struct SwipeCatcher: UIViewRepresentable {
         let v = Probe()
         v.isUserInteractionEnabled = false
         v.backgroundColor = .clear
-        v.onWindow = { [weak c = context.coordinator, weak v] in if let c, let v { c.attach(to: v) } }
+        v.onWindow = { [weak c = context.coordinator, weak v] inWindow in
+            guard let c, let v else { return }
+            if inWindow { c.attach(to: v) } else { c.detach() }
+        }
         return v
     }
 
@@ -201,8 +217,8 @@ struct SwipeCatcher: UIViewRepresentable {
     static func dismantleUIView(_ uiView: Probe, coordinator: Coordinator) { coordinator.detach() }
 
     final class Probe: UIView {
-        var onWindow: (() -> Void)?
-        override func didMoveToWindow() { super.didMoveToWindow(); if window != nil { onWindow?() } }
+        var onWindow: ((Bool) -> Void)?
+        override func didMoveToWindow() { super.didMoveToWindow(); onWindow?(window != nil) }
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
@@ -231,7 +247,7 @@ struct SwipeCatcher: UIViewRepresentable {
         }
 
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-            guard let pan = g as? UIPanGestureRecognizer, let probe else { return false }
+            guard let pan = g as? UIPanGestureRecognizer, let probe, probe.window != nil else { return false }
             let p = pan.location(in: probe)
             guard probe.bounds.contains(p) else { return false }
             let vel = pan.velocity(in: probe)

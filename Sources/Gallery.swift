@@ -51,8 +51,13 @@ final class ImageLoader {
         }
     }
 
-    /// Full-size variant for X media (pbs.twimg.com serves ?name=large).
+    /// Full-size variant for X media (pbs.twimg.com serves ?name=large) and Bluesky CDN thumbnails.
     static func fullSize(_ url: URL) -> URL {
+        let s = url.absoluteString
+        if s.contains("/img/feed_thumbnail/") {
+            let full = s.replacingOccurrences(of: "/img/feed_thumbnail/", with: "/img/feed_fullsize/")
+            if let u = URL(string: full) { return u }
+        }
         guard url.host == "pbs.twimg.com", url.query == nil,
               var c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
         c.queryItems = [URLQueryItem(name: "name", value: "large")]
@@ -81,7 +86,8 @@ struct CachedImage: View {
             }
         }
         .task(id: url) {
-            if let c = ImageLoader.shared.cached(url) { image = c }
+            let cached = ImageLoader.shared.cached(url)
+            if image !== cached { image = cached }
             if image == nil {
                 let img = await ImageLoader.shared.load(url)
                 withAnimation(.easeIn(duration: 0.15)) { image = img }
@@ -122,11 +128,19 @@ struct GalleryView: View {
             .ignoresSafeArea()
             .offset(y: dragY)
 
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.headline).foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(Color.black.opacity(0.5), in: Circle())
+            HStack(spacing: 10) {
+                Button { Task { await save() } } label: {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.headline).foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(Color.black.opacity(0.5), in: Circle())
+                }
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.headline).foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(Color.black.opacity(0.5), in: Circle())
+                }
             }
             .padding(16)
             .opacity(dragY == 0 ? 1 : 0)

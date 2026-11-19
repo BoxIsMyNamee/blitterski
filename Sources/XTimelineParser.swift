@@ -37,26 +37,47 @@ enum XTimelineParser {
 
     /// Replies from a TweetDetail response (everything except the focal tweet itself).
     static func parseDetail(_ data: Data, excluding focalID: String) -> [Post] {
-        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [] }
+        parseThread(data, focalID: focalID).replies
+    }
+
+    /// Parents (above the focal tweet) and replies (below the focal tweet) from a TweetDetail response.
+    static func parseThread(_ data: Data, focalID: String) -> (parents: [Post], replies: [Post]) {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return ([], []) }
         let instructions = dig(root, ["data", "threaded_conversation_with_injections_v2", "instructions"]) as? [[String: Any]] ?? []
-        var out: [Post] = []
+        var parents: [Post] = []
+        var replies: [Post] = []
         var seen = Set<String>([focalID])
-        func add(_ item: [String: Any]) {
-            guard var r = dig(item, ["itemContent", "tweet_results", "result"]) as? [String: Any] else { return }
+        var sawFocal = false
+
+        func extract(_ container: [String: Any]) -> Post? {
+            guard var r = dig(container, ["itemContent", "tweet_results", "result"]) as? [String: Any] else { return nil }
             if let inner = r["tweet"] as? [String: Any] { r = inner }
-            if let p = post(from: r), seen.insert(p.id).inserted { out.append(p) }
+            return post(from: r)
         }
+
         for ins in instructions {
             for e in (ins["entries"] as? [[String: Any]]) ?? [] {
                 let id = e["entryId"] as? String ?? ""
-                // Replies live in conversation modules; skip the focal tweet and its ancestors.
+                if id == "tweet-\(focalID)" {
+                    sawFocal = true
+                    continue
+                }
+                if id.hasPrefix("tweet-"), let content = e["content"] as? [String: Any], let p = extract(content) {
+                    if seen.insert(p.id).inserted {
+                        if sawFocal { replies.append(p) } else { parents.append(p) }
+                    }
+                    continue
+                }
                 guard id.hasPrefix("conversationthread-") else { continue }
+                sawFocal = true
                 for it in (dig(e, ["content", "items"]) as? [[String: Any]]) ?? [] {
-                    if let item = it["item"] as? [String: Any] { add(item) }
+                    if let item = it["item"] as? [String: Any], let p = extract(item), seen.insert(p.id).inserted {
+                        replies.append(p)
+                    }
                 }
             }
         }
-        return out
+        return (parents, replies)
     }
 
     static func post(from raw: [String: Any]) -> Post? {
@@ -74,7 +95,8 @@ enum XTimelineParser {
         let ulegacy = user["legacy"] as? [String: Any] ?? [:]
         let handle = (dig(user, ["core", "screen_name"]) as? String) ?? (ulegacy["screen_name"] as? String) ?? "unknown"
         let name = (dig(user, ["core", "name"]) as? String) ?? (ulegacy["name"] as? String) ?? handle
-        let avatar = (dig(user, ["avatar", "image_url"]) as? String) ?? (ulegacy["profile_image_url_https"] as? String)
+        let rawAvatar = (dig(user, ["avatar", "image_url"]) as? String) ?? (ulegacy["profile_image_url_https"] as? String)
+        let avatar = rawAvatar?.replacingOccurrences(of: "_normal.", with: "_bigger.")
 
         // Text: long-form note if present, then expand t.co links and drop media links.
         let note = dig(r, ["note_tweet", "note_tweet_results", "result"]) as? [String: Any]
@@ -154,6 +176,8 @@ enum XTimelineParser {
         s.replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&apos;", with: "'")
             .replacingOccurrences(of: "&amp;", with: "&")
     }
 
